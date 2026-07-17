@@ -30,7 +30,12 @@ vec3 fresnel_schlick(float cos_theta, vec3 f0) {
 }
 
 void main() {
-  vec4 albedo = v_base_color * texture(tex, v_texture_coords);
+  vec4 sampled = texture(tex, v_texture_coords);
+  // glTF base-color textures are authored in sRGB. Flutter GPU's host-visible
+  // texture is unorm, so decode it explicitly before doing PBR lighting.
+  vec3 sampled_linear = pow(sampled.rgb, vec3(2.2));
+  vec4 albedo = vec4(v_base_color.rgb * sampled_linear,
+      v_base_color.a * sampled.a);
   float roughness = clamp(v_lighting.w, 0.04, 1.0);
   float metallic = clamp(v_lighting.z, 0.0, 1.0);
   vec3 n = normalize(v_normal);
@@ -50,7 +55,8 @@ void main() {
   vec3 direct = (diffuse + specular) * v_lighting.y * n_dot_l;
   vec3 ambient = albedo.rgb * v_lighting.x;
   vec3 color = ambient + direct;
-  color = color / (color + vec3(1.0));
+  // Filmic exposure keeps bright yellow saturated without clipping highlights.
+  color = vec3(1.0) - exp(-color * 1.35);
   color = pow(color, vec3(1.0 / 2.2));
   frag_color = vec4(color, albedo.a);
 }

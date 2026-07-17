@@ -42,8 +42,8 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
   late Future<ui.Image> _image;
   late Future<(GlintGlbMesh, GlintTexturePixels)> _asset;
   Timer? _rotationTimer;
-  double _yaw = .72;
-  double _pitch = -.48;
+  double _yaw = 0;
+  double _pitch = -.18;
   double _distance = 4.2;
   double _gestureDistance = 4.2;
   double _panX = 0;
@@ -226,8 +226,8 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
             -1,
             -1,
             0,
-            .28,
-            .9,
+            .42,
+            3.2,
             mesh.metallicFactor,
             mesh.roughnessFactor,
             0,
