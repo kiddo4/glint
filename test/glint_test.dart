@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glint/glint.dart';
@@ -25,5 +28,36 @@ void main() {
     expect(find.byType(Scene3D), findsOneWidget);
     expect(find.text('Flutter overlay'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('PNG bytes decode to tightly packed RGBA pixels', (tester) async {
+    final pixels = await tester.runAsync(
+      () => GlintTexturePixels.decode(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk'
+          '+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+        debugLabel: 'one-pixel.png',
+      ),
+    );
+    expect(pixels!.width, 1);
+    expect(pixels.height, 1);
+    expect(pixels.bytes.lengthInBytes, 4);
+  });
+
+  test('invalid image bytes produce an actionable Glint error', () async {
+    await expectLater(
+      GlintTexturePixels.decode(
+        Uint8List.fromList([1, 2, 3]),
+        debugLabel: 'broken.jpg',
+      ),
+      throwsA(
+        isA<GlintTextureException>().having(
+          (error) => error.asset,
+          'asset',
+          'broken.jpg',
+        ),
+      ),
+    );
   });
 }
