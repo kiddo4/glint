@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-/// The first triangle primitive decoded from a binary glTF 2.0 asset.
+/// Triangle geometry aggregated from the active scene of a binary glTF asset.
 class GlintGlbMesh {
   const GlintGlbMesh({
     required this.positions,
@@ -101,7 +101,7 @@ class GlintGlbMesh {
     }
   }
 
-  /// Parses a glTF 2.0 binary container and its first triangle primitive.
+  /// Parses and aggregates supported triangle primitives in the active scene.
   static GlintGlbMesh parse(ByteData bytes, {String debugLabel = 'model.glb'}) {
     try {
       final data = ByteData.view(
@@ -171,41 +171,73 @@ class _GlbReader {
 
   GlintGlbMesh readFirstMesh() {
     final meshes = _list(document['meshes'], 'meshes');
-    final primitives = _list((meshes.first as Map)['primitives'], 'primitives');
-    final primitive = primitives.first as Map;
-    if ((primitive['mode'] as int? ?? 4) != 4) {
-      throw const FormatException('Only TRIANGLES primitives are supported.');
+    final positions = <double>[];
+    final uvs = <double>[];
+    final normals = <double>[];
+    final indices = <int>[];
+    Map? firstPrimitive;
+    var uses32BitIndices = false;
+    for (final instance in _meshInstances()) {
+      final meshIndex = instance.$1;
+      if (meshIndex < 0 || meshIndex >= meshes.length) {
+        throw const FormatException('Mesh index is out of range.');
+      }
+      final primitives = _list(
+        (meshes[meshIndex] as Map)['primitives'],
+        'primitives',
+      );
+      for (final value in primitives) {
+        final primitive = value as Map;
+        if ((primitive['mode'] as int? ?? 4) != 4) continue;
+        firstPrimitive ??= primitive;
+        final attributes = primitive['attributes'] as Map;
+        final positionAccessor = attributes['POSITION'] as int?;
+        final indexAccessor = primitive['indices'] as int?;
+        if (positionAccessor == null || indexAccessor == null) {
+          throw const FormatException(
+            'Primitive requires POSITION and indices.',
+          );
+        }
+        final localPositions = _readFloats(positionAccessor, 'VEC3');
+        final primitiveIndices = _readIndices(indexAccessor);
+        final vertexOffset = positions.length ~/ 3;
+        final transformedPositions = _transformPositions(
+          localPositions,
+          instance.$2,
+        );
+        final vertexCount = transformedPositions.length ~/ 3;
+        final uvAccessor = attributes['TEXCOORD_0'] as int?;
+        final primitiveUvs = uvAccessor == null
+            ? List<double>.filled(vertexCount * 2, 0)
+            : _readFloats(uvAccessor, 'VEC2');
+        if (primitiveUvs.length != vertexCount * 2) {
+          throw const FormatException('TEXCOORD_0 count must match POSITION.');
+        }
+        final normalAccessor = attributes['NORMAL'] as int?;
+        final localNormals = normalAccessor == null
+            ? _generateNormals(localPositions, primitiveIndices)
+            : _readFloats(normalAccessor, 'VEC3');
+        final transformedNormals = _transformNormals(localNormals, instance.$2);
+        if (transformedNormals.length != transformedPositions.length) {
+          throw const FormatException('NORMAL count must match POSITION.');
+        }
+        final componentType = _accessor(indexAccessor)['componentType'] as int;
+        if (componentType != 5123 && componentType != 5125) {
+          throw const FormatException(
+            'Indices must be unsigned short or unsigned int.',
+          );
+        }
+        uses32BitIndices =
+            uses32BitIndices || componentType == 5125 || vertexOffset > 65535;
+        positions.addAll(transformedPositions);
+        uvs.addAll(primitiveUvs);
+        normals.addAll(transformedNormals);
+        indices.addAll(primitiveIndices.map((index) => index + vertexOffset));
+      }
     }
-    final attributes = primitive['attributes'] as Map;
-    final positionAccessor = attributes['POSITION'] as int?;
-    final indexAccessor = primitive['indices'] as int?;
-    if (positionAccessor == null || indexAccessor == null) {
-      throw const FormatException('Primitive requires POSITION and indices.');
-    }
-    final localPositions = _readFloats(positionAccessor, 'VEC3');
-    final worldTransform = _worldTransformForMesh(0);
-    final positions = _transformPositions(localPositions, worldTransform);
-    final vertexCount = positions.length ~/ 3;
-    final uvAccessor = attributes['TEXCOORD_0'] as int?;
-    final uvs = uvAccessor == null
-        ? List<double>.filled(vertexCount * 2, 0)
-        : _readFloats(uvAccessor, 'VEC2');
-    if (uvs.length != vertexCount * 2) {
-      throw const FormatException('TEXCOORD_0 count must match POSITION.');
-    }
-    final normalAccessor = attributes['NORMAL'] as int?;
-    final localNormals = normalAccessor == null
-        ? _generateNormals(localPositions, _readIndices(indexAccessor))
-        : _readFloats(normalAccessor, 'VEC3');
-    final normals = _transformNormals(localNormals, worldTransform);
-    if (normals.length != positions.length) {
-      throw const FormatException('NORMAL count must match POSITION.');
-    }
-    final accessor = _accessor(indexAccessor);
-    final componentType = accessor['componentType'] as int;
-    if (componentType != 5123 && componentType != 5125) {
+    if (firstPrimitive == null || positions.isEmpty) {
       throw const FormatException(
-        'Indices must be unsigned short or unsigned int.',
+        'Active scene contains no supported TRIANGLES primitives.',
       );
     }
     final bounds = _bounds(positions);
@@ -213,46 +245,52 @@ class _GlbReader {
       positions: positions,
       textureCoordinates: uvs,
       normals: normals,
-      indices: _readIndices(indexAccessor),
-      uses32BitIndices: componentType == 5125,
-      baseColorImageBytes: _readBaseColorImage(primitive),
-      baseColorFactor: _readBaseColorFactor(primitive),
-      metallicFactor: _readMaterialNumber(primitive, 'metallicFactor', 1),
-      roughnessFactor: _readMaterialNumber(primitive, 'roughnessFactor', 1),
-      worldTransform: worldTransform.storage.toList(),
+      indices: indices,
+      uses32BitIndices: uses32BitIndices || positions.length ~/ 3 > 65535,
+      baseColorImageBytes: _readBaseColorImage(firstPrimitive),
+      baseColorFactor: _readBaseColorFactor(firstPrimitive),
+      metallicFactor: _readMaterialNumber(firstPrimitive, 'metallicFactor', 1),
+      roughnessFactor: _readMaterialNumber(
+        firstPrimitive,
+        'roughnessFactor',
+        1,
+      ),
+      worldTransform: vm.Matrix4.identity().storage.toList(),
       boundsMinimum: bounds.$1,
       boundsMaximum: bounds.$2,
     );
   }
 
-  vm.Matrix4 _worldTransformForMesh(int meshIndex) {
+  List<(int, vm.Matrix4)> _meshInstances() {
     final nodes = _optionalList(document['nodes']);
     final scenes = _optionalList(document['scenes']);
-    if (nodes.isEmpty || scenes.isEmpty) return vm.Matrix4.identity();
+    if (nodes.isEmpty || scenes.isEmpty) {
+      return [(0, vm.Matrix4.identity())];
+    }
     final activeScene = (document['scene'] as int?) ?? 0;
-    if (activeScene >= scenes.length) {
+    if (activeScene < 0 || activeScene >= scenes.length) {
       throw const FormatException('Active scene index is out of range.');
     }
     final roots = ((scenes[activeScene] as Map)['nodes'] as List?) ?? const [];
+    final instances = <(int, vm.Matrix4)>[];
     for (final root in roots.cast<int>()) {
-      final found = _findMeshTransform(
+      _collectMeshInstances(
         root,
-        meshIndex,
         vm.Matrix4.identity(),
         nodes,
         <int>{},
+        instances,
       );
-      if (found != null) return found;
     }
-    return vm.Matrix4.identity();
+    return instances;
   }
 
-  vm.Matrix4? _findMeshTransform(
+  void _collectMeshInstances(
     int nodeIndex,
-    int meshIndex,
     vm.Matrix4 parent,
     List nodes,
     Set<int> path,
+    List<(int, vm.Matrix4)> output,
   ) {
     if (nodeIndex < 0 || nodeIndex >= nodes.length) {
       throw const FormatException('Node index is out of range.');
@@ -262,14 +300,11 @@ class _GlbReader {
     }
     final node = nodes[nodeIndex] as Map;
     final world = parent * _localTransform(node);
-    if (node['mesh'] == meshIndex) return world;
+    final mesh = node['mesh'] as int?;
+    if (mesh != null) output.add((mesh, world));
     for (final child in ((node['children'] as List?) ?? const []).cast<int>()) {
-      final found = _findMeshTransform(child, meshIndex, world, nodes, {
-        ...path,
-      });
-      if (found != null) return found;
+      _collectMeshInstances(child, world, nodes, {...path}, output);
     }
-    return null;
   }
 
   vm.Matrix4 _localTransform(Map node) {

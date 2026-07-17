@@ -98,6 +98,10 @@ void main() {
             'attributes': {'POSITION': 0, 'TEXCOORD_0': 1},
             'indices': 2,
           },
+          {
+            'attributes': {'POSITION': 0, 'TEXCOORD_0': 1},
+            'indices': 2,
+          },
         ],
       },
     ],
@@ -112,10 +116,15 @@ void main() {
         'scale': [2, 1, 1],
         'mesh': 0,
       },
+      {
+        'name': 'Second prism instance',
+        'translation': [-2, 0, 3],
+        'mesh': 0,
+      },
     ],
     'scenes': [
       {
-        'nodes': [0],
+        'nodes': [0, 2],
       },
     ],
     'scene': 0,

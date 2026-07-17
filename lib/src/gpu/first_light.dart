@@ -260,6 +260,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       await completer.future;
       return texture.asImage();
     } catch (error) {
+      debugPrint('Glint Flutter GPU render failed: $error');
       widget.onError?.call(error);
       rethrow;
     }

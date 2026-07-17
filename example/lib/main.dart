@@ -15,7 +15,13 @@ class GlintShowcase extends StatelessWidget {
         children: [
           const GlintGpuFirstLight(
             model: Model.asset('packages/glint/assets/models/duck.glb'),
-            fallback: Scene3D(autoRotate: true, scene: ProductShowroom()),
+            fallback: Center(
+              child: Text(
+                'Flutter GPU renderer unavailable.\n'
+                'Launch with --enable-impeller --enable-flutter-gpu.',
+                textAlign: TextAlign.center,
+              ),
+            ),
           ),
           SafeArea(
             child: Padding(

@@ -39,7 +39,7 @@ Deliverable: a spinning, well-lit real glTF model inside the showcase app.
 - [x] Traverse active glTF scene roots and child-node hierarchies
 - [x] Compose node matrix or translation/rotation/scale world transforms
 - [x] Transform mesh positions and normals and expose world-space bounds
-- Multi-primitive scene aggregation
+- [x] Aggregate triangle primitives across active mesh-node instances
 - View-frustum culling
 - Ray construction, mesh intersection, and tap picking
 - HDRI image-based environment lighting

@@ -67,16 +67,16 @@ void main() {
         'packages/glint/assets/models/glint-prism.glb',
       ),
     );
-    expect(mesh!.vertexCount, 6);
-    expect(mesh.indices, hasLength(24));
-    expect(mesh.textureCoordinates, hasLength(12));
+    expect(mesh!.vertexCount, 24);
+    expect(mesh.indices, hasLength(96));
+    expect(mesh.textureCoordinates, hasLength(48));
     expect(mesh.uses32BitIndices, isFalse);
-    expect(mesh.boundsMinimum[0], closeTo(0, 0.0001));
+    expect(mesh.boundsMinimum[0], closeTo(-3, 0.0001));
     expect(mesh.boundsMaximum[0], closeTo(4, 0.0001));
     expect(mesh.boundsMinimum[1], closeTo(-1.35, 0.0001));
     expect(mesh.boundsMaximum[1], closeTo(1.35, 0.0001));
-    expect(mesh.worldTransform[0], closeTo(2, 0.0001));
-    expect(mesh.worldTransform[12], closeTo(2, 0.0001));
+    expect(mesh.boundsMinimum[2], closeTo(-1, 0.0001));
+    expect(mesh.boundsMaximum[2], closeTo(4, 0.0001));
   });
 
   testWidgets('real Khronos GLB exposes its embedded material image', (
