@@ -72,4 +72,23 @@ void main() {
     expect(mesh.textureCoordinates, hasLength(12));
     expect(mesh.uses32BitIndices, isFalse);
   });
+
+  testWidgets('real Khronos GLB exposes its embedded material image', (
+    tester,
+  ) async {
+    final mesh = await tester.runAsync(
+      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/duck.glb'),
+    );
+    expect(mesh!.vertexCount, greaterThan(1000));
+    expect(mesh.indices, isNotEmpty);
+    expect(mesh.baseColorImageBytes, isNotNull);
+    final pixels = await tester.runAsync(
+      () => GlintTexturePixels.decode(
+        mesh.baseColorImageBytes!,
+        debugLabel: 'Duck embedded texture',
+      ),
+    );
+    expect(pixels!.width, greaterThan(1));
+    expect(pixels.height, greaterThan(1));
+  });
 }

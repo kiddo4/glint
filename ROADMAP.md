@@ -22,7 +22,9 @@ engine, not a general game engine.
 - [ ] Promote texture references into the public material API
 - [x] Parse GLB headers, JSON/BIN chunks, buffer views, and mesh accessors
 - [x] Render GLB positions, UVs, and 16/32-bit indices instead of cube geometry
-- [ ] Parse glTF material and embedded image references
+- [x] Resolve base-color material factors and embedded GLB image buffer views
+- [x] Render the official Khronos Duck GLB with its own embedded texture
+- [ ] Parse normals and add directional PBR lighting
 - Perspective camera with orbit, pan, and zoom
 - glTF/GLB buffers, accessors, textures, materials, and node hierarchy
 - PBR metallic-roughness shader with directional and ambient light

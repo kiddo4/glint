@@ -28,6 +28,7 @@ flutter:
     - shaders/glint.shaderbundle
     - assets/textures/glint-grid.png
     - assets/models/glint-prism.glb
+    - assets/models/duck.glb
 
   # To add assets to your package, add an assets section, like this:
   # assets:

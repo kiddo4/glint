@@ -10,12 +10,16 @@ class GlintGlbMesh {
     required this.textureCoordinates,
     required this.indices,
     required this.uses32BitIndices,
+    this.baseColorImageBytes,
+    this.baseColorFactor = const [1, 1, 1, 1],
   });
 
   final List<double> positions;
   final List<double> textureCoordinates;
   final List<int> indices;
   final bool uses32BitIndices;
+  final Uint8List? baseColorImageBytes;
+  final List<double> baseColorFactor;
 
   int get vertexCount => positions.length ~/ 3;
 
@@ -135,7 +139,48 @@ class _GlbReader {
       textureCoordinates: uvs,
       indices: _readIndices(indexAccessor),
       uses32BitIndices: componentType == 5125,
+      baseColorImageBytes: _readBaseColorImage(primitive),
+      baseColorFactor: _readBaseColorFactor(primitive),
     );
+  }
+
+  Uint8List? _readBaseColorImage(Map primitive) {
+    final materialIndex = primitive['material'] as int?;
+    if (materialIndex == null) return null;
+    final materials = _optionalList(document['materials']);
+    if (materialIndex >= materials.length) return null;
+    final material = materials[materialIndex] as Map;
+    final pbr = material['pbrMetallicRoughness'] as Map?;
+    final textureInfo = pbr?['baseColorTexture'] as Map?;
+    final textureIndex = textureInfo?['index'] as int?;
+    if (textureIndex == null) return null;
+    final textures = _optionalList(document['textures']);
+    if (textureIndex >= textures.length) return null;
+    final imageIndex = (textures[textureIndex] as Map)['source'] as int?;
+    final images = _optionalList(document['images']);
+    if (imageIndex == null || imageIndex >= images.length) return null;
+    final image = images[imageIndex] as Map;
+    final viewIndex = image['bufferView'] as int?;
+    if (viewIndex == null) return null;
+    final view = _view(viewIndex);
+    final start = view['byteOffset'] as int? ?? 0;
+    final length = view['byteLength'] as int;
+    return Uint8List.fromList(
+      Uint8List.view(binary.buffer, binary.offsetInBytes + start, length),
+    );
+  }
+
+  List<double> _readBaseColorFactor(Map primitive) {
+    final materialIndex = primitive['material'] as int?;
+    final materials = _optionalList(document['materials']);
+    if (materialIndex == null || materialIndex >= materials.length) {
+      return const [1, 1, 1, 1];
+    }
+    final material = materials[materialIndex] as Map;
+    final pbr = material['pbrMetallicRoughness'] as Map?;
+    final factor = pbr?['baseColorFactor'] as List?;
+    return factor?.map((value) => (value as num).toDouble()).toList() ??
+        const [1, 1, 1, 1];
   }
 
   List<double> _readFloats(int index, String expectedType) {
@@ -197,6 +242,8 @@ class _GlbReader {
     }
     return value;
   }
+
+  List _optionalList(Object? value) => value is List ? value : const [];
 }
 
 class GlintGlbException implements Exception {

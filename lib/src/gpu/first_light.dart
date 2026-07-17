@@ -64,7 +64,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
 
       final context = gpu.gpuContext;
       final mesh = await GlintGlbMesh.fromAsset(
-        'packages/glint/assets/models/glint-prism.glb',
+        'packages/glint/assets/models/duck.glb',
       );
       final texture = context.createTexture(
         gpu.StorageMode.devicePrivate,
@@ -77,9 +77,14 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
         widget.height,
         format: context.defaultDepthStencilFormat,
       );
-      final texturePixels = await GlintTexturePixels.fromAsset(
-        'packages/glint/assets/textures/glint-grid.png',
-      );
+      final texturePixels = mesh.baseColorImageBytes == null
+          ? await GlintTexturePixels.fromAsset(
+              'packages/glint/assets/textures/glint-grid.png',
+            )
+          : await GlintTexturePixels.decode(
+              mesh.baseColorImageBytes!,
+              debugLabel: 'embedded GLB base-color texture',
+            );
       final sourceTexture = context.createTexture(
         gpu.StorageMode.hostVisible,
         texturePixels.width,
@@ -107,9 +112,26 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       pass.setCullMode(gpu.CullMode.backFace);
 
       final hostBuffer = context.createHostBuffer();
+      final bounds = _bounds(mesh.positions);
+      final center = [
+        (bounds.$1[0] + bounds.$2[0]) / 2,
+        (bounds.$1[1] + bounds.$2[1]) / 2,
+        (bounds.$1[2] + bounds.$2[2]) / 2,
+      ];
+      final largestExtent = List.generate(
+        3,
+        (i) => bounds.$2[i] - bounds.$1[i],
+      ).reduce((a, b) => a > b ? a : b);
+      final assetScale = largestExtent == 0 ? 1.0 : 2.5 / largestExtent;
       final vertices = <double>[];
       for (var i = 0; i < mesh.vertexCount; i++) {
-        vertices.addAll(mesh.positions.skip(i * 3).take(3));
+        vertices.addAll(
+          List.generate(
+            3,
+            (axis) =>
+                (mesh.positions[i * 3 + axis] - center[axis]) * assetScale,
+          ),
+        );
         vertices.addAll(mesh.textureCoordinates.skip(i * 2).take(2));
       }
       pass.bindVertexBuffer(
@@ -138,7 +160,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       final mvp = projection * view * model;
       pass.bindUniform(
         pipeline.vertexShader.getUniformSlot('VertInfo'),
-        hostBuffer.emplace(_floats([...mvp.storage, 1, 1, 1, 1])),
+        hostBuffer.emplace(_floats([...mvp.storage, ...mesh.baseColorFactor])),
       );
       pass.bindTexture(
         pipeline.fragmentShader.getUniformSlot('tex'),
@@ -170,6 +192,27 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
 
   ByteData _floats(List<double> values) =>
       Float32List.fromList(values).buffer.asByteData();
+
+  (List<double>, List<double>) _bounds(List<double> positions) {
+    final minimum = [double.infinity, double.infinity, double.infinity];
+    final maximum = [
+      double.negativeInfinity,
+      double.negativeInfinity,
+      double.negativeInfinity,
+    ];
+    for (var i = 0; i < positions.length; i += 3) {
+      for (var axis = 0; axis < 3; axis++) {
+        final value = positions[i + axis];
+        if (value < minimum[axis]) {
+          minimum[axis] = value;
+        }
+        if (value > maximum[axis]) {
+          maximum[axis] = value;
+        }
+      }
+    }
+    return (minimum, maximum);
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<ui.Image>(
