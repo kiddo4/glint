@@ -24,8 +24,9 @@ verified `flutter_gpu` render pass:
 - Orbit and zoom gestures
 - Native Flutter composition and hot-reload-safe scene code
 - A temporary canvas renderer used to validate the public API
-- `GlintGpuFirstLight`, an offscreen GPU triangle using a compiled Impeller
+- `GlintGpuFirstLight`, an indexed GPU cube using a compiled Impeller
   shader bundle and Flutter texture composition
+- Packaged PNG/JPEG decoding and RGBA texture upload into a sampled GPU material
 
 This renderer is not the v1 architecture. Milestone 1 replaces it with
 `flutter_gpu`; Glint does not build a separate Metal/Vulkan abstraction.

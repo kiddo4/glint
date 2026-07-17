@@ -18,7 +18,8 @@ engine, not a general game engine.
 - [x] Indexed cube with model-view-projection and a depth attachment
 - [x] Texture coordinates, sampler, and procedural GPU image upload
 - [x] Decode PNG/JPEG assets into upload-ready RGBA pixels
-- [ ] Wire decoded asset textures into materials and the showcase
+- [x] Wire a packaged PNG through decoding, upload, and the showcase sampler
+- [ ] Promote texture references into the public material API
 - Perspective camera with orbit, pan, and zoom
 - glTF/GLB buffers, accessors, textures, materials, and node hierarchy
 - PBR metallic-roughness shader with directional and ambient light

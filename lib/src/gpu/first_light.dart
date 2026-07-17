@@ -6,6 +6,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import '../assets/texture_pixels.dart';
+
 /// Glint's first verified 3D pass: a textured, indexed, depth-tested GPU cube.
 ///
 /// Run an app containing this widget with `flutter run --enable-flutter-gpu`.
@@ -71,14 +73,17 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
         widget.height,
         format: context.defaultDepthStencilFormat,
       );
+      final texturePixels = await GlintTexturePixels.fromAsset(
+        'packages/glint/assets/textures/glint-grid.png',
+      );
       final sourceTexture = context.createTexture(
         gpu.StorageMode.hostVisible,
-        _textureSize,
-        _textureSize,
+        texturePixels.width,
+        texturePixels.height,
         coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
         enableRenderTargetUsage: false,
       );
-      sourceTexture.overwrite(_checkerboardTexture());
+      sourceTexture.overwrite(texturePixels.bytes);
       final commandBuffer = context.createCommandBuffer();
       final target = gpu.RenderTarget.singleColor(
         gpu.ColorAttachment(
@@ -152,21 +157,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
   ByteData _floats(List<double> values) =>
       Float32List.fromList(values).buffer.asByteData();
 
-  ByteData _checkerboardTexture() {
-    final pixels = Uint8List(_textureSize * _textureSize * 4);
-    for (var y = 0; y < _textureSize; y++) {
-      for (var x = 0; x < _textureSize; x++) {
-        final light = ((x ~/ 8) + (y ~/ 8)).isEven;
-        final offset = (y * _textureSize + x) * 4;
-        pixels[offset] = light ? 255 : 33;
-        pixels[offset + 1] = light ? 176 : 25;
-        pixels[offset + 2] = light ? 0 : 52;
-        pixels[offset + 3] = 255;
-      }
-    }
-    return pixels.buffer.asByteData();
-  }
-
   @override
   Widget build(BuildContext context) => FutureBuilder<ui.Image>(
     future: _image,
@@ -181,8 +171,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
     },
   );
 }
-
-const _textureSize = 64;
 
 // Position xyz followed by UV. Vertices are split per face for clean seams.
 const _cubeVertices = <double>[
