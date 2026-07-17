@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
+import 'package:vector_math/vector_math.dart' as vm;
 
 /// The first triangle primitive decoded from a binary glTF 2.0 asset.
 class GlintGlbMesh {
@@ -17,6 +18,26 @@ class GlintGlbMesh {
     this.baseColorFactor = const [1, 1, 1, 1],
     this.metallicFactor = 1,
     this.roughnessFactor = 1,
+    this.worldTransform = const [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+    ],
+    required this.boundsMinimum,
+    required this.boundsMaximum,
   });
 
   final List<double> positions;
@@ -28,6 +49,9 @@ class GlintGlbMesh {
   final List<double> baseColorFactor;
   final double metallicFactor;
   final double roughnessFactor;
+  final List<double> worldTransform;
+  final List<double> boundsMinimum;
+  final List<double> boundsMaximum;
 
   int get vertexCount => positions.length ~/ 3;
 
@@ -158,7 +182,9 @@ class _GlbReader {
     if (positionAccessor == null || indexAccessor == null) {
       throw const FormatException('Primitive requires POSITION and indices.');
     }
-    final positions = _readFloats(positionAccessor, 'VEC3');
+    final localPositions = _readFloats(positionAccessor, 'VEC3');
+    final worldTransform = _worldTransformForMesh(0);
+    final positions = _transformPositions(localPositions, worldTransform);
     final vertexCount = positions.length ~/ 3;
     final uvAccessor = attributes['TEXCOORD_0'] as int?;
     final uvs = uvAccessor == null
@@ -168,9 +194,10 @@ class _GlbReader {
       throw const FormatException('TEXCOORD_0 count must match POSITION.');
     }
     final normalAccessor = attributes['NORMAL'] as int?;
-    final normals = normalAccessor == null
-        ? _generateNormals(positions, _readIndices(indexAccessor))
+    final localNormals = normalAccessor == null
+        ? _generateNormals(localPositions, _readIndices(indexAccessor))
         : _readFloats(normalAccessor, 'VEC3');
+    final normals = _transformNormals(localNormals, worldTransform);
     if (normals.length != positions.length) {
       throw const FormatException('NORMAL count must match POSITION.');
     }
@@ -181,6 +208,7 @@ class _GlbReader {
         'Indices must be unsigned short or unsigned int.',
       );
     }
+    final bounds = _bounds(positions);
     return GlintGlbMesh(
       positions: positions,
       textureCoordinates: uvs,
@@ -191,7 +219,129 @@ class _GlbReader {
       baseColorFactor: _readBaseColorFactor(primitive),
       metallicFactor: _readMaterialNumber(primitive, 'metallicFactor', 1),
       roughnessFactor: _readMaterialNumber(primitive, 'roughnessFactor', 1),
+      worldTransform: worldTransform.storage.toList(),
+      boundsMinimum: bounds.$1,
+      boundsMaximum: bounds.$2,
     );
+  }
+
+  vm.Matrix4 _worldTransformForMesh(int meshIndex) {
+    final nodes = _optionalList(document['nodes']);
+    final scenes = _optionalList(document['scenes']);
+    if (nodes.isEmpty || scenes.isEmpty) return vm.Matrix4.identity();
+    final activeScene = (document['scene'] as int?) ?? 0;
+    if (activeScene >= scenes.length) {
+      throw const FormatException('Active scene index is out of range.');
+    }
+    final roots = ((scenes[activeScene] as Map)['nodes'] as List?) ?? const [];
+    for (final root in roots.cast<int>()) {
+      final found = _findMeshTransform(
+        root,
+        meshIndex,
+        vm.Matrix4.identity(),
+        nodes,
+        <int>{},
+      );
+      if (found != null) return found;
+    }
+    return vm.Matrix4.identity();
+  }
+
+  vm.Matrix4? _findMeshTransform(
+    int nodeIndex,
+    int meshIndex,
+    vm.Matrix4 parent,
+    List nodes,
+    Set<int> path,
+  ) {
+    if (nodeIndex < 0 || nodeIndex >= nodes.length) {
+      throw const FormatException('Node index is out of range.');
+    }
+    if (!path.add(nodeIndex)) {
+      throw const FormatException('Node hierarchy contains a cycle.');
+    }
+    final node = nodes[nodeIndex] as Map;
+    final world = parent * _localTransform(node);
+    if (node['mesh'] == meshIndex) return world;
+    for (final child in ((node['children'] as List?) ?? const []).cast<int>()) {
+      final found = _findMeshTransform(child, meshIndex, world, nodes, {
+        ...path,
+      });
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  vm.Matrix4 _localTransform(Map node) {
+    final matrix = node['matrix'] as List?;
+    if (matrix != null) {
+      if (matrix.length != 16) {
+        throw const FormatException('Node matrix must have 16 elements.');
+      }
+      return vm.Matrix4.fromList(
+        matrix.map((value) => (value as num).toDouble()).toList(),
+      );
+    }
+    final t = (node['translation'] as List?) ?? const [0, 0, 0];
+    final r = (node['rotation'] as List?) ?? const [0, 0, 0, 1];
+    final s = (node['scale'] as List?) ?? const [1, 1, 1];
+    return vm.Matrix4.compose(
+      vm.Vector3(
+        (t[0] as num).toDouble(),
+        (t[1] as num).toDouble(),
+        (t[2] as num).toDouble(),
+      ),
+      vm.Quaternion(
+        (r[0] as num).toDouble(),
+        (r[1] as num).toDouble(),
+        (r[2] as num).toDouble(),
+        (r[3] as num).toDouble(),
+      ),
+      vm.Vector3(
+        (s[0] as num).toDouble(),
+        (s[1] as num).toDouble(),
+        (s[2] as num).toDouble(),
+      ),
+    );
+  }
+
+  List<double> _transformPositions(List<double> values, vm.Matrix4 matrix) {
+    final output = <double>[];
+    for (var i = 0; i < values.length; i += 3) {
+      final value = matrix.transform3(
+        vm.Vector3(values[i], values[i + 1], values[i + 2]),
+      );
+      output.addAll([value.x, value.y, value.z]);
+    }
+    return output;
+  }
+
+  List<double> _transformNormals(List<double> values, vm.Matrix4 matrix) {
+    final normalMatrix = vm.Matrix3.zero()..copyNormalMatrix(matrix);
+    final output = <double>[];
+    for (var i = 0; i < values.length; i += 3) {
+      final value = normalMatrix.transform(
+        vm.Vector3(values[i], values[i + 1], values[i + 2]),
+      )..normalize();
+      output.addAll([value.x, value.y, value.z]);
+    }
+    return output;
+  }
+
+  (List<double>, List<double>) _bounds(List<double> positions) {
+    final minimum = [double.infinity, double.infinity, double.infinity];
+    final maximum = [
+      double.negativeInfinity,
+      double.negativeInfinity,
+      double.negativeInfinity,
+    ];
+    for (var i = 0; i < positions.length; i += 3) {
+      for (var axis = 0; axis < 3; axis++) {
+        minimum[axis] = math.min(minimum[axis], positions[i + axis]);
+        maximum[axis] = math.max(maximum[axis], positions[i + axis]);
+      }
+    }
+    return (minimum, maximum);
   }
 
   double _readMaterialNumber(Map primitive, String key, double fallback) {

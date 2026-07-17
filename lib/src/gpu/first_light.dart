@@ -168,15 +168,14 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       pass.setCullMode(gpu.CullMode.backFace);
 
       final hostBuffer = context.createHostBuffer();
-      final bounds = _bounds(mesh.positions);
       final center = [
-        (bounds.$1[0] + bounds.$2[0]) / 2,
-        (bounds.$1[1] + bounds.$2[1]) / 2,
-        (bounds.$1[2] + bounds.$2[2]) / 2,
+        (mesh.boundsMinimum[0] + mesh.boundsMaximum[0]) / 2,
+        (mesh.boundsMinimum[1] + mesh.boundsMaximum[1]) / 2,
+        (mesh.boundsMinimum[2] + mesh.boundsMaximum[2]) / 2,
       ];
       final largestExtent = List.generate(
         3,
-        (i) => bounds.$2[i] - bounds.$1[i],
+        (i) => mesh.boundsMaximum[i] - mesh.boundsMinimum[i],
       ).reduce((a, b) => a > b ? a : b);
       final assetScale = largestExtent == 0 ? 1.0 : 2.5 / largestExtent;
       final vertices = <double>[];
@@ -268,27 +267,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
 
   ByteData _floats(List<double> values) =>
       Float32List.fromList(values).buffer.asByteData();
-
-  (List<double>, List<double>) _bounds(List<double> positions) {
-    final minimum = [double.infinity, double.infinity, double.infinity];
-    final maximum = [
-      double.negativeInfinity,
-      double.negativeInfinity,
-      double.negativeInfinity,
-    ];
-    for (var i = 0; i < positions.length; i += 3) {
-      for (var axis = 0; axis < 3; axis++) {
-        final value = positions[i + axis];
-        if (value < minimum[axis]) {
-          minimum[axis] = value;
-        }
-        if (value > maximum[axis]) {
-          maximum[axis] = value;
-        }
-      }
-    }
-    return (minimum, maximum);
-  }
 
   @override
   Widget build(BuildContext context) {

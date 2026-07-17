@@ -36,7 +36,10 @@ Deliverable: a spinning, well-lit real glTF model inside the showcase app.
 
 ## Milestone 2 — Scene Engine (6–8 weeks)
 
-- World transforms and bounding volumes
+- [x] Traverse active glTF scene roots and child-node hierarchies
+- [x] Compose node matrix or translation/rotation/scale world transforms
+- [x] Transform mesh positions and normals and expose world-space bounds
+- Multi-primitive scene aggregation
 - View-frustum culling
 - Ray construction, mesh intersection, and tap picking
 - HDRI image-based environment lighting

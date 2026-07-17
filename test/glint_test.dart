@@ -71,6 +71,12 @@ void main() {
     expect(mesh.indices, hasLength(24));
     expect(mesh.textureCoordinates, hasLength(12));
     expect(mesh.uses32BitIndices, isFalse);
+    expect(mesh.boundsMinimum[0], closeTo(0, 0.0001));
+    expect(mesh.boundsMaximum[0], closeTo(4, 0.0001));
+    expect(mesh.boundsMinimum[1], closeTo(-1.35, 0.0001));
+    expect(mesh.boundsMaximum[1], closeTo(1.35, 0.0001));
+    expect(mesh.worldTransform[0], closeTo(2, 0.0001));
+    expect(mesh.worldTransform[12], closeTo(2, 0.0001));
   });
 
   testWidgets('real Khronos GLB exposes its embedded material image', (

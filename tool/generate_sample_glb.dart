@@ -102,7 +102,16 @@ void main() {
       },
     ],
     'nodes': [
-      {'mesh': 0},
+      {
+        'name': 'Translated parent',
+        'translation': [2, 0, 0],
+        'children': [1],
+      },
+      {
+        'name': 'Scaled prism',
+        'scale': [2, 1, 1],
+        'mesh': 0,
+      },
     ],
     'scenes': [
       {
