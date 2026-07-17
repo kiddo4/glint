@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -8,18 +10,24 @@ class GlintGlbMesh {
   const GlintGlbMesh({
     required this.positions,
     required this.textureCoordinates,
+    required this.normals,
     required this.indices,
     required this.uses32BitIndices,
     this.baseColorImageBytes,
     this.baseColorFactor = const [1, 1, 1, 1],
+    this.metallicFactor = 1,
+    this.roughnessFactor = 1,
   });
 
   final List<double> positions;
   final List<double> textureCoordinates;
+  final List<double> normals;
   final List<int> indices;
   final bool uses32BitIndices;
   final Uint8List? baseColorImageBytes;
   final List<double> baseColorFactor;
+  final double metallicFactor;
+  final double roughnessFactor;
 
   int get vertexCount => positions.length ~/ 3;
 
@@ -34,6 +42,38 @@ class GlintGlbMesh {
     } catch (error) {
       if (error is GlintGlbException) rethrow;
       throw GlintGlbException(assetKey, 'Asset could not be loaded', error);
+    }
+  }
+
+  /// Downloads and parses a GLB with bounded size and actionable HTTP errors.
+  static Future<GlintGlbMesh> fromNetwork(
+    Uri uri, {
+    Duration timeout = const Duration(seconds: 20),
+    int maximumBytes = 25 * 1024 * 1024,
+  }) async {
+    final client = HttpClient()..connectionTimeout = timeout;
+    try {
+      final request = await client.getUrl(uri).timeout(timeout);
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('HTTP ${response.statusCode}', uri: uri);
+      }
+      final builder = BytesBuilder(copy: false);
+      var received = 0;
+      await for (final chunk in response.timeout(timeout)) {
+        received += chunk.length;
+        if (received > maximumBytes) {
+          throw FormatException('GLB exceeds the $maximumBytes byte limit.');
+        }
+        builder.add(chunk);
+      }
+      final bytes = builder.takeBytes();
+      return parse(bytes.buffer.asByteData(), debugLabel: uri.toString());
+    } catch (error) {
+      if (error is GlintGlbException) rethrow;
+      throw GlintGlbException(uri.toString(), 'Network GLB load failed', error);
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -127,6 +167,13 @@ class _GlbReader {
     if (uvs.length != vertexCount * 2) {
       throw const FormatException('TEXCOORD_0 count must match POSITION.');
     }
+    final normalAccessor = attributes['NORMAL'] as int?;
+    final normals = normalAccessor == null
+        ? _generateNormals(positions, _readIndices(indexAccessor))
+        : _readFloats(normalAccessor, 'VEC3');
+    if (normals.length != positions.length) {
+      throw const FormatException('NORMAL count must match POSITION.');
+    }
     final accessor = _accessor(indexAccessor);
     final componentType = accessor['componentType'] as int;
     if (componentType != 5123 && componentType != 5125) {
@@ -137,11 +184,67 @@ class _GlbReader {
     return GlintGlbMesh(
       positions: positions,
       textureCoordinates: uvs,
+      normals: normals,
       indices: _readIndices(indexAccessor),
       uses32BitIndices: componentType == 5125,
       baseColorImageBytes: _readBaseColorImage(primitive),
       baseColorFactor: _readBaseColorFactor(primitive),
+      metallicFactor: _readMaterialNumber(primitive, 'metallicFactor', 1),
+      roughnessFactor: _readMaterialNumber(primitive, 'roughnessFactor', 1),
     );
+  }
+
+  double _readMaterialNumber(Map primitive, String key, double fallback) {
+    final materialIndex = primitive['material'] as int?;
+    final materials = _optionalList(document['materials']);
+    if (materialIndex == null || materialIndex >= materials.length) {
+      return fallback;
+    }
+    final material = materials[materialIndex] as Map;
+    final pbr = material['pbrMetallicRoughness'] as Map?;
+    return (pbr?[key] as num?)?.toDouble() ?? fallback;
+  }
+
+  List<double> _generateNormals(List<double> positions, List<int> indices) {
+    final normals = List<double>.filled(positions.length, 0);
+    for (var i = 0; i + 2 < indices.length; i += 3) {
+      final a = indices[i] * 3;
+      final b = indices[i + 1] * 3;
+      final c = indices[i + 2] * 3;
+      final ab = [
+        positions[b] - positions[a],
+        positions[b + 1] - positions[a + 1],
+        positions[b + 2] - positions[a + 2],
+      ];
+      final ac = [
+        positions[c] - positions[a],
+        positions[c + 1] - positions[a + 1],
+        positions[c + 2] - positions[a + 2],
+      ];
+      final n = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+      ];
+      for (final vertex in [a, b, c]) {
+        for (var axis = 0; axis < 3; axis++) {
+          normals[vertex + axis] += n[axis];
+        }
+      }
+    }
+    for (var i = 0; i < normals.length; i += 3) {
+      final length = math.sqrt(
+        normals[i] * normals[i] +
+            normals[i + 1] * normals[i + 1] +
+            normals[i + 2] * normals[i + 2],
+      );
+      if (length > 0) {
+        normals[i] /= length;
+        normals[i + 1] /= length;
+        normals[i + 2] /= length;
+      }
+    }
+    return normals;
   }
 
   Uint8List? _readBaseColorImage(Map primitive) {

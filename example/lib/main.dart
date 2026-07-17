@@ -14,6 +14,7 @@ class GlintShowcase extends StatelessWidget {
       body: Stack(
         children: [
           const GlintGpuFirstLight(
+            model: Model.asset('packages/glint/assets/models/duck.glb'),
             fallback: Scene3D(autoRotate: true, scene: ProductShowroom()),
           ),
           SafeArea(
@@ -48,7 +49,9 @@ class GlintShowcase extends StatelessWidget {
                         horizontal: 16,
                         vertical: 10,
                       ),
-                      child: Text('KHRONOS DUCK  •  EMBEDDED MATERIAL'),
+                      child: Text(
+                        'DRAG ORBIT  •  PINCH ZOOM  •  TWO-FINGER PAN',
+                      ),
                     ),
                   ),
                 ],

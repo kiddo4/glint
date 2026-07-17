@@ -82,6 +82,7 @@ void main() {
     expect(mesh!.vertexCount, greaterThan(1000));
     expect(mesh.indices, isNotEmpty);
     expect(mesh.baseColorImageBytes, isNotNull);
+    expect(mesh.normals, hasLength(mesh.positions.length));
     final pixels = await tester.runAsync(
       () => GlintTexturePixels.decode(
         mesh.baseColorImageBytes!,

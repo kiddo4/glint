@@ -5,7 +5,9 @@ interactive glTF product experiences directly in Flutter's widget tree.
 
 ```dart
 Stack(children: [
-  Scene3D(scene: ProductShowroom()),
+  GlintGpuFirstLight(
+    model: Model.asset('assets/product.glb'),
+  ),
   const ProductCard(), // ordinary Flutter UI, zero bridging
 ])
 ```
@@ -21,21 +23,25 @@ verified `flutter_gpu` render pass:
 
 - `Scene3D(scene: ...)`, `Scene`, `Node3D`, and transform hierarchy
 - Perspective `OrbitCamera`, directional and ambient lighting contracts
-- Orbit and zoom gestures
+- Automatic rotation, drag orbit, pinch zoom, and two-finger pan
 - Native Flutter composition and hot-reload-safe scene code
 - A temporary canvas renderer used to validate the public API
-- `GlintGpuFirstLight`, an indexed GPU cube using a compiled Impeller
+- `GlintGpuFirstLight`, an indexed GLB model using a compiled Impeller
   shader bundle and Flutter texture composition
 - Packaged PNG/JPEG decoding and RGBA texture upload into a sampled GPU material
+- GLB geometry, normals, embedded base-color images, and material factors
+- GGX metallic-roughness lighting with directional and ambient illumination
+- `Model.asset` and bounded, timeout-aware `Model.network` sources
 
-This renderer is not the v1 architecture. Milestone 1 replaces it with
-`flutter_gpu`; Glint does not build a separate Metal/Vulkan abstraction.
+The GPU path is the Milestone 1 architecture. The canvas renderer remains only
+as a compatibility fallback; Glint does not build a separate Metal/Vulkan
+abstraction.
 
 ## Run the prototype
 
 ```sh
 cd example
-flutter run -d macos --enable-flutter-gpu
+flutter run -d macos --enable-impeller --enable-flutter-gpu
 ```
 
 ## v1 scope

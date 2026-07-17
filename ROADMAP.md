@@ -10,7 +10,7 @@ engine, not a general game engine.
 - Validate scene hierarchy, orbit gestures, hot reload, and overlay composition
 - Preserve renderer replacement behind the scene API
 
-## Milestone 1 — First Light (in progress)
+## Milestone 1 — First Light (complete)
 
 - [x] Pin Flutter 3.44.1 stable with Impeller and opt-in `flutter_gpu`
 - [x] Compile a multi-backend Impeller shader bundle
@@ -19,16 +19,18 @@ engine, not a general game engine.
 - [x] Texture coordinates, sampler, and procedural GPU image upload
 - [x] Decode PNG/JPEG assets into upload-ready RGBA pixels
 - [x] Wire a packaged PNG through decoding, upload, and the showcase sampler
-- [ ] Promote texture references into the public material API
+- [x] Expose reusable `Model.asset` and bounded `Model.network` sources
 - [x] Parse GLB headers, JSON/BIN chunks, buffer views, and mesh accessors
 - [x] Render GLB positions, UVs, and 16/32-bit indices instead of cube geometry
 - [x] Resolve base-color material factors and embedded GLB image buffer views
 - [x] Render the official Khronos Duck GLB with its own embedded texture
-- [ ] Parse normals and add directional PBR lighting
-- Perspective camera with orbit, pan, and zoom
-- glTF/GLB buffers, accessors, textures, materials, and node hierarchy
-- PBR metallic-roughness shader with directional and ambient light
-- Actionable typed asset-loading errors
+- [x] Parse or generate normals for lit meshes
+- [x] Perspective camera with automatic rotation, orbit, pan, and zoom
+- [x] GGX metallic-roughness shader with directional and ambient light
+- [x] Actionable typed image, GLB, HTTP, size, and timeout errors
+
+The v0.1 loader intentionally renders the first triangle primitive. Multi-node,
+multi-primitive scene aggregation is part of Milestone 2's scene graph work.
 
 Deliverable: a spinning, well-lit real glTF model inside the showcase app.
 
