@@ -6,7 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:vector_math/vector_math.dart' as vm;
 
-/// The first verified Glint render pass: a triangle produced by `flutter_gpu`.
+/// Glint's first verified 3D pass: an indexed, depth-tested GPU cube.
 ///
 /// Run an app containing this widget with `flutter run --enable-flutter-gpu`.
 /// [fallback] is shown with a useful error when Flutter GPU is unavailable.
@@ -65,50 +65,53 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
         widget.width,
         widget.height,
       );
+      final depthTexture = context.createTexture(
+        gpu.StorageMode.deviceTransient,
+        widget.width,
+        widget.height,
+        format: context.defaultDepthStencilFormat,
+      );
       final commandBuffer = context.createCommandBuffer();
       final target = gpu.RenderTarget.singleColor(
         gpu.ColorAttachment(
           texture: texture,
           clearValue: vm.Vector4(9 / 255, 11 / 255, 19 / 255, 1),
         ),
+        depthStencilAttachment: gpu.DepthStencilAttachment(
+          texture: depthTexture,
+          depthClearValue: 1,
+        ),
       );
       final pass = commandBuffer.createRenderPass(target);
       final pipeline = context.createRenderPipeline(vertex, fragment);
       pass.bindPipeline(pipeline);
+      pass.setDepthWriteEnable(true);
+      pass.setDepthCompareOperation(gpu.CompareFunction.less);
+      pass.setCullMode(gpu.CullMode.backFace);
 
       final hostBuffer = context.createHostBuffer();
-      pass.bindVertexBuffer(
+      pass.bindVertexBuffer(hostBuffer.emplace(_floats(_cubeVertices)), 8);
+      pass.bindIndexBuffer(
         hostBuffer.emplace(
-          _floats(const [-0.72, 0.58, 0.0, -0.72, 0.72, 0.58]),
+          Uint16List.fromList(_cubeIndices).buffer.asByteData(),
         ),
-        3,
+        gpu.IndexType.int16,
+        _cubeIndices.length,
       );
+      final projection = vm.makePerspectiveMatrix(
+        55 * 3.141592653589793 / 180,
+        widget.width / widget.height,
+        .1,
+        100,
+      );
+      final view = vm.Matrix4.translationValues(0, 0, -4.2);
+      final model = vm.Matrix4.identity()
+        ..rotateX(-.48)
+        ..rotateY(.72);
+      final mvp = projection * view * model;
       pass.bindUniform(
         pipeline.vertexShader.getUniformSlot('VertInfo'),
-        hostBuffer.emplace(
-          _floats(const [
-            1,
-            0,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            0,
-            0,
-            1,
-            1,
-            .69,
-            0,
-            1,
-          ]),
-        ),
+        hostBuffer.emplace(_floats([...mvp.storage, 1, 1, 1, 1])),
       );
       pass.draw();
 
@@ -145,3 +148,69 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
     },
   );
 }
+
+const _cubeVertices = <double>[
+  -1,
+  -1,
+  -1,
+  1,
+  -1,
+  -1,
+  1,
+  1,
+  -1,
+  -1,
+  1,
+  -1,
+  -1,
+  -1,
+  1,
+  1,
+  -1,
+  1,
+  1,
+  1,
+  1,
+  -1,
+  1,
+  1,
+];
+
+const _cubeIndices = <int>[
+  0,
+  2,
+  1,
+  0,
+  3,
+  2,
+  4,
+  5,
+  6,
+  4,
+  6,
+  7,
+  0,
+  4,
+  7,
+  0,
+  7,
+  3,
+  1,
+  2,
+  6,
+  1,
+  6,
+  5,
+  3,
+  7,
+  6,
+  3,
+  6,
+  2,
+  0,
+  1,
+  5,
+  0,
+  5,
+  4,
+];

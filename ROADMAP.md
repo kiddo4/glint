@@ -15,7 +15,8 @@ engine, not a general game engine.
 - [x] Pin Flutter 3.44.1 stable with Impeller and opt-in `flutter_gpu`
 - [x] Compile a multi-backend Impeller shader bundle
 - [x] Render a triangle offscreen and composite its texture in Flutter
-- [ ] Indexed textured cube with a depth attachment
+- [x] Indexed cube with model-view-projection and a depth attachment
+- [ ] Texture coordinates, sampler, and image upload
 - Perspective camera with orbit, pan, and zoom
 - glTF/GLB buffers, accessors, textures, materials, and node hierarchy
 - PBR metallic-roughness shader with directional and ambient light

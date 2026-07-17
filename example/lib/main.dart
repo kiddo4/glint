@@ -48,7 +48,7 @@ class GlintShowcase extends StatelessWidget {
                         horizontal: 16,
                         vertical: 10,
                       ),
-                      child: Text('FIRST LIGHT  •  flutter_gpu'),
+                      child: Text('INDEXED CUBE  •  DEPTH TESTED'),
                     ),
                   ),
                 ],
