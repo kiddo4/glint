@@ -16,7 +16,8 @@ engine, not a general game engine.
 - [x] Compile a multi-backend Impeller shader bundle
 - [x] Render a triangle offscreen and composite its texture in Flutter
 - [x] Indexed cube with model-view-projection and a depth attachment
-- [ ] Texture coordinates, sampler, and image upload
+- [x] Texture coordinates, sampler, and procedural GPU image upload
+- [ ] Decode PNG/JPEG assets and upload their pixel data
 - Perspective camera with orbit, pan, and zoom
 - glTF/GLB buffers, accessors, textures, materials, and node hierarchy
 - PBR metallic-roughness shader with directional and ambient light

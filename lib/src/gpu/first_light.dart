@@ -6,7 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:vector_math/vector_math.dart' as vm;
 
-/// Glint's first verified 3D pass: an indexed, depth-tested GPU cube.
+/// Glint's first verified 3D pass: a textured, indexed, depth-tested GPU cube.
 ///
 /// Run an app containing this widget with `flutter run --enable-flutter-gpu`.
 /// [fallback] is shown with a useful error when Flutter GPU is unavailable.
@@ -71,6 +71,14 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
         widget.height,
         format: context.defaultDepthStencilFormat,
       );
+      final sourceTexture = context.createTexture(
+        gpu.StorageMode.hostVisible,
+        _textureSize,
+        _textureSize,
+        coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
+        enableRenderTargetUsage: false,
+      );
+      sourceTexture.overwrite(_checkerboardTexture());
       final commandBuffer = context.createCommandBuffer();
       final target = gpu.RenderTarget.singleColor(
         gpu.ColorAttachment(
@@ -90,7 +98,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       pass.setCullMode(gpu.CullMode.backFace);
 
       final hostBuffer = context.createHostBuffer();
-      pass.bindVertexBuffer(hostBuffer.emplace(_floats(_cubeVertices)), 8);
+      pass.bindVertexBuffer(hostBuffer.emplace(_floats(_cubeVertices)), 24);
       pass.bindIndexBuffer(
         hostBuffer.emplace(
           Uint16List.fromList(_cubeIndices).buffer.asByteData(),
@@ -113,6 +121,16 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
         pipeline.vertexShader.getUniformSlot('VertInfo'),
         hostBuffer.emplace(_floats([...mvp.storage, 1, 1, 1, 1])),
       );
+      pass.bindTexture(
+        pipeline.fragmentShader.getUniformSlot('tex'),
+        sourceTexture,
+        sampler: gpu.SamplerOptions(
+          minFilter: gpu.MinMagFilter.linear,
+          magFilter: gpu.MinMagFilter.linear,
+          widthAddressMode: gpu.SamplerAddressMode.repeat,
+          heightAddressMode: gpu.SamplerAddressMode.repeat,
+        ),
+      );
       pass.draw();
 
       final completer = Completer<void>();
@@ -134,6 +152,21 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
   ByteData _floats(List<double> values) =>
       Float32List.fromList(values).buffer.asByteData();
 
+  ByteData _checkerboardTexture() {
+    final pixels = Uint8List(_textureSize * _textureSize * 4);
+    for (var y = 0; y < _textureSize; y++) {
+      for (var x = 0; x < _textureSize; x++) {
+        final light = ((x ~/ 8) + (y ~/ 8)).isEven;
+        final offset = (y * _textureSize + x) * 4;
+        pixels[offset] = light ? 255 : 33;
+        pixels[offset + 1] = light ? 176 : 25;
+        pixels[offset + 2] = light ? 0 : 52;
+        pixels[offset + 3] = 255;
+      }
+    }
+    return pixels.buffer.asByteData();
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<ui.Image>(
     future: _image,
@@ -149,10 +182,25 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
   );
 }
 
+const _textureSize = 64;
+
+// Position xyz followed by UV. Vertices are split per face for clean seams.
 const _cubeVertices = <double>[
   -1,
   -1,
   -1,
+  0,
+  1,
+  -1,
+  1,
+  -1,
+  0,
+  0,
+  1,
+  1,
+  -1,
+  1,
+  0,
   1,
   -1,
   -1,
@@ -161,9 +209,7 @@ const _cubeVertices = <double>[
   -1,
   -1,
   1,
-  -1,
-  -1,
-  -1,
+  0,
   1,
   1,
   -1,
@@ -171,46 +217,132 @@ const _cubeVertices = <double>[
   1,
   1,
   1,
+  1,
+  1,
+  1,
+  0,
   -1,
   1,
   1,
+  0,
+  0,
+  -1,
+  -1,
+  -1,
+  0,
+  1,
+  -1,
+  -1,
+  1,
+  1,
+  1,
+  -1,
+  1,
+  1,
+  1,
+  0,
+  -1,
+  1,
+  -1,
+  0,
+  0,
+  1,
+  -1,
+  -1,
+  0,
+  1,
+  1,
+  1,
+  -1,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  0,
+  1,
+  -1,
+  1,
+  1,
+  1,
+  -1,
+  1,
+  -1,
+  0,
+  1,
+  -1,
+  1,
+  1,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  0,
+  1,
+  1,
+  -1,
+  1,
+  1,
+  -1,
+  -1,
+  -1,
+  0,
+  1,
+  1,
+  -1,
+  -1,
+  1,
+  1,
+  1,
+  -1,
+  1,
+  1,
+  0,
+  -1,
+  -1,
+  1,
+  0,
+  0,
 ];
 
 const _cubeIndices = <int>[
   0,
-  2,
   1,
-  0,
-  3,
   2,
+  0,
+  2,
+  3,
   4,
   5,
   6,
   4,
   6,
   7,
-  0,
-  4,
-  7,
-  0,
-  7,
-  3,
-  1,
-  2,
-  6,
-  1,
-  6,
-  5,
-  3,
-  7,
-  6,
-  3,
-  6,
-  2,
-  0,
-  1,
-  5,
-  0,
-  5,
-  4,
+  8,
+  9,
+  10,
+  8,
+  10,
+  11,
+  12,
+  13,
+  14,
+  12,
+  14,
+  15,
+  16,
+  17,
+  18,
+  16,
+  18,
+  19,
+  20,
+  21,
+  22,
+  20,
+  22,
+  23,
 ];
