@@ -48,7 +48,7 @@ class GlintShowcase extends StatelessWidget {
                         horizontal: 16,
                         vertical: 10,
                       ),
-                      child: Text('PNG MATERIAL  •  GPU SAMPLER'),
+                      child: Text('GLB MODEL  •  BINARY ACCESSORS'),
                     ),
                   ),
                 ],

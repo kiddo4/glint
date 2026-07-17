@@ -20,6 +20,9 @@ engine, not a general game engine.
 - [x] Decode PNG/JPEG assets into upload-ready RGBA pixels
 - [x] Wire a packaged PNG through decoding, upload, and the showcase sampler
 - [ ] Promote texture references into the public material API
+- [x] Parse GLB headers, JSON/BIN chunks, buffer views, and mesh accessors
+- [x] Render GLB positions, UVs, and 16/32-bit indices instead of cube geometry
+- [ ] Parse glTF material and embedded image references
 - Perspective camera with orbit, pan, and zoom
 - glTF/GLB buffers, accessors, textures, materials, and node hierarchy
 - PBR metallic-roughness shader with directional and ambient light

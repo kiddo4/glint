@@ -60,4 +60,16 @@ void main() {
       ),
     );
   });
+
+  testWidgets('packaged GLB decodes mesh accessors', (tester) async {
+    final mesh = await tester.runAsync(
+      () => GlintGlbMesh.fromAsset(
+        'packages/glint/assets/models/glint-prism.glb',
+      ),
+    );
+    expect(mesh!.vertexCount, 6);
+    expect(mesh.indices, hasLength(24));
+    expect(mesh.textureCoordinates, hasLength(12));
+    expect(mesh.uses32BitIndices, isFalse);
+  });
 }

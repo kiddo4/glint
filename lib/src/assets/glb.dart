@@ -1,0 +1,212 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:flutter/services.dart';
+
+/// The first triangle primitive decoded from a binary glTF 2.0 asset.
+class GlintGlbMesh {
+  const GlintGlbMesh({
+    required this.positions,
+    required this.textureCoordinates,
+    required this.indices,
+    required this.uses32BitIndices,
+  });
+
+  final List<double> positions;
+  final List<double> textureCoordinates;
+  final List<int> indices;
+  final bool uses32BitIndices;
+
+  int get vertexCount => positions.length ~/ 3;
+
+  /// Loads a GLB from a Flutter asset bundle.
+  static Future<GlintGlbMesh> fromAsset(
+    String assetKey, {
+    AssetBundle? bundle,
+  }) async {
+    try {
+      final bytes = await (bundle ?? rootBundle).load(assetKey);
+      return parse(bytes, debugLabel: assetKey);
+    } catch (error) {
+      if (error is GlintGlbException) rethrow;
+      throw GlintGlbException(assetKey, 'Asset could not be loaded', error);
+    }
+  }
+
+  /// Parses a glTF 2.0 binary container and its first triangle primitive.
+  static GlintGlbMesh parse(ByteData bytes, {String debugLabel = 'model.glb'}) {
+    try {
+      final data = ByteData.view(
+        bytes.buffer,
+        bytes.offsetInBytes,
+        bytes.lengthInBytes,
+      );
+      if (data.lengthInBytes < 20 ||
+          data.getUint32(0, Endian.little) != 0x46546c67) {
+        throw const FormatException('Missing GLB magic header.');
+      }
+      final version = data.getUint32(4, Endian.little);
+      final declaredLength = data.getUint32(8, Endian.little);
+      if (version != 2) {
+        throw FormatException('Expected glTF 2.0, found $version.');
+      }
+      if (declaredLength != data.lengthInBytes) {
+        throw const FormatException(
+          'GLB declared length does not match its bytes.',
+        );
+      }
+
+      Map<String, dynamic>? document;
+      ByteData? binary;
+      var offset = 12;
+      while (offset + 8 <= data.lengthInBytes) {
+        final length = data.getUint32(offset, Endian.little);
+        final type = data.getUint32(offset + 4, Endian.little);
+        offset += 8;
+        if (offset + length > data.lengthInBytes) {
+          throw const FormatException(
+            'GLB chunk exceeds the container length.',
+          );
+        }
+        if (type == 0x4e4f534a) {
+          final jsonBytes = Uint8List.view(
+            data.buffer,
+            data.offsetInBytes + offset,
+            length,
+          );
+          document =
+              jsonDecode(utf8.decode(jsonBytes).trim()) as Map<String, dynamic>;
+        } else if (type == 0x004e4942) {
+          binary = ByteData.view(
+            data.buffer,
+            data.offsetInBytes + offset,
+            length,
+          );
+        }
+        offset += length;
+      }
+      if (document == null || binary == null) {
+        throw const FormatException('GLB requires JSON and BIN chunks.');
+      }
+      return _GlbReader(document, binary).readFirstMesh();
+    } catch (error) {
+      if (error is GlintGlbException) rethrow;
+      throw GlintGlbException(debugLabel, 'GLB parsing failed', error);
+    }
+  }
+}
+
+class _GlbReader {
+  _GlbReader(this.document, this.binary);
+  final Map<String, dynamic> document;
+  final ByteData binary;
+
+  GlintGlbMesh readFirstMesh() {
+    final meshes = _list(document['meshes'], 'meshes');
+    final primitives = _list((meshes.first as Map)['primitives'], 'primitives');
+    final primitive = primitives.first as Map;
+    if ((primitive['mode'] as int? ?? 4) != 4) {
+      throw const FormatException('Only TRIANGLES primitives are supported.');
+    }
+    final attributes = primitive['attributes'] as Map;
+    final positionAccessor = attributes['POSITION'] as int?;
+    final indexAccessor = primitive['indices'] as int?;
+    if (positionAccessor == null || indexAccessor == null) {
+      throw const FormatException('Primitive requires POSITION and indices.');
+    }
+    final positions = _readFloats(positionAccessor, 'VEC3');
+    final vertexCount = positions.length ~/ 3;
+    final uvAccessor = attributes['TEXCOORD_0'] as int?;
+    final uvs = uvAccessor == null
+        ? List<double>.filled(vertexCount * 2, 0)
+        : _readFloats(uvAccessor, 'VEC2');
+    if (uvs.length != vertexCount * 2) {
+      throw const FormatException('TEXCOORD_0 count must match POSITION.');
+    }
+    final accessor = _accessor(indexAccessor);
+    final componentType = accessor['componentType'] as int;
+    if (componentType != 5123 && componentType != 5125) {
+      throw const FormatException(
+        'Indices must be unsigned short or unsigned int.',
+      );
+    }
+    return GlintGlbMesh(
+      positions: positions,
+      textureCoordinates: uvs,
+      indices: _readIndices(indexAccessor),
+      uses32BitIndices: componentType == 5125,
+    );
+  }
+
+  List<double> _readFloats(int index, String expectedType) {
+    final accessor = _accessor(index);
+    if (accessor['componentType'] != 5126 || accessor['type'] != expectedType) {
+      throw FormatException(
+        '$expectedType accessor must contain FLOAT values.',
+      );
+    }
+    final components = expectedType == 'VEC3' ? 3 : 2;
+    final view = _view(accessor['bufferView'] as int);
+    final count = accessor['count'] as int;
+    final start =
+        (view['byteOffset'] as int? ?? 0) +
+        (accessor['byteOffset'] as int? ?? 0);
+    final stride = view['byteStride'] as int? ?? components * 4;
+    final output = <double>[];
+    for (var element = 0; element < count; element++) {
+      for (var component = 0; component < components; component++) {
+        output.add(
+          binary.getFloat32(
+            start + element * stride + component * 4,
+            Endian.little,
+          ),
+        );
+      }
+    }
+    return output;
+  }
+
+  List<int> _readIndices(int index) {
+    final accessor = _accessor(index);
+    if (accessor['type'] != 'SCALAR') {
+      throw const FormatException('Index accessor must be SCALAR.');
+    }
+    final componentType = accessor['componentType'] as int;
+    final width = componentType == 5125 ? 4 : 2;
+    final view = _view(accessor['bufferView'] as int);
+    final start =
+        (view['byteOffset'] as int? ?? 0) +
+        (accessor['byteOffset'] as int? ?? 0);
+    final count = accessor['count'] as int;
+    return List.generate(
+      count,
+      (i) => componentType == 5125
+          ? binary.getUint32(start + i * width, Endian.little)
+          : binary.getUint16(start + i * width, Endian.little),
+    );
+  }
+
+  Map _accessor(int index) =>
+      _list(document['accessors'], 'accessors')[index] as Map;
+  Map _view(int index) =>
+      _list(document['bufferViews'], 'bufferViews')[index] as Map;
+
+  List _list(Object? value, String name) {
+    if (value is! List || value.isEmpty) {
+      throw FormatException('GLB contains no $name.');
+    }
+    return value;
+  }
+}
+
+class GlintGlbException implements Exception {
+  const GlintGlbException(this.asset, this.message, [this.cause]);
+  final String asset;
+  final String message;
+  final Object? cause;
+
+  @override
+  String toString() =>
+      'GlintGlbException($asset): $message'
+      '${cause == null ? '' : ' — $cause'}';
+}

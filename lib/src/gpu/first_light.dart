@@ -7,8 +7,9 @@ import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:vector_math/vector_math.dart' as vm;
 
 import '../assets/texture_pixels.dart';
+import '../assets/glb.dart';
 
-/// Glint's first verified 3D pass: a textured, indexed, depth-tested GPU cube.
+/// Glint's first verified asset pass: a textured GLB mesh rendered on the GPU.
 ///
 /// Run an app containing this widget with `flutter run --enable-flutter-gpu`.
 /// [fallback] is shown with a useful error when Flutter GPU is unavailable.
@@ -62,6 +63,9 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       }
 
       final context = gpu.gpuContext;
+      final mesh = await GlintGlbMesh.fromAsset(
+        'packages/glint/assets/models/glint-prism.glb',
+      );
       final texture = context.createTexture(
         gpu.StorageMode.devicePrivate,
         widget.width,
@@ -103,13 +107,23 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
       pass.setCullMode(gpu.CullMode.backFace);
 
       final hostBuffer = context.createHostBuffer();
-      pass.bindVertexBuffer(hostBuffer.emplace(_floats(_cubeVertices)), 24);
+      final vertices = <double>[];
+      for (var i = 0; i < mesh.vertexCount; i++) {
+        vertices.addAll(mesh.positions.skip(i * 3).take(3));
+        vertices.addAll(mesh.textureCoordinates.skip(i * 2).take(2));
+      }
+      pass.bindVertexBuffer(
+        hostBuffer.emplace(_floats(vertices)),
+        mesh.vertexCount,
+      );
       pass.bindIndexBuffer(
         hostBuffer.emplace(
-          Uint16List.fromList(_cubeIndices).buffer.asByteData(),
+          mesh.uses32BitIndices
+              ? Uint32List.fromList(mesh.indices).buffer.asByteData()
+              : Uint16List.fromList(mesh.indices).buffer.asByteData(),
         ),
-        gpu.IndexType.int16,
-        _cubeIndices.length,
+        mesh.uses32BitIndices ? gpu.IndexType.int32 : gpu.IndexType.int16,
+        mesh.indices.length,
       );
       final projection = vm.makePerspectiveMatrix(
         55 * 3.141592653589793 / 180,
@@ -171,166 +185,3 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight> {
     },
   );
 }
-
-// Position xyz followed by UV. Vertices are split per face for clean seams.
-const _cubeVertices = <double>[
-  -1,
-  -1,
-  -1,
-  0,
-  1,
-  -1,
-  1,
-  -1,
-  0,
-  0,
-  1,
-  1,
-  -1,
-  1,
-  0,
-  1,
-  -1,
-  -1,
-  1,
-  1,
-  -1,
-  -1,
-  1,
-  0,
-  1,
-  1,
-  -1,
-  1,
-  1,
-  1,
-  1,
-  1,
-  1,
-  1,
-  0,
-  -1,
-  1,
-  1,
-  0,
-  0,
-  -1,
-  -1,
-  -1,
-  0,
-  1,
-  -1,
-  -1,
-  1,
-  1,
-  1,
-  -1,
-  1,
-  1,
-  1,
-  0,
-  -1,
-  1,
-  -1,
-  0,
-  0,
-  1,
-  -1,
-  -1,
-  0,
-  1,
-  1,
-  1,
-  -1,
-  0,
-  0,
-  1,
-  1,
-  1,
-  1,
-  0,
-  1,
-  -1,
-  1,
-  1,
-  1,
-  -1,
-  1,
-  -1,
-  0,
-  1,
-  -1,
-  1,
-  1,
-  0,
-  0,
-  1,
-  1,
-  1,
-  1,
-  0,
-  1,
-  1,
-  -1,
-  1,
-  1,
-  -1,
-  -1,
-  -1,
-  0,
-  1,
-  1,
-  -1,
-  -1,
-  1,
-  1,
-  1,
-  -1,
-  1,
-  1,
-  0,
-  -1,
-  -1,
-  1,
-  0,
-  0,
-];
-
-const _cubeIndices = <int>[
-  0,
-  1,
-  2,
-  0,
-  2,
-  3,
-  4,
-  5,
-  6,
-  4,
-  6,
-  7,
-  8,
-  9,
-  10,
-  8,
-  10,
-  11,
-  12,
-  13,
-  14,
-  12,
-  14,
-  15,
-  16,
-  17,
-  18,
-  16,
-  18,
-  19,
-  20,
-  21,
-  22,
-  20,
-  22,
-  23,
-];
