@@ -26,6 +26,27 @@ void main() {
     expect(a, isNot(const Material3D(color: Color(0xffd9b23a), metallic: 0)));
   });
 
+  test('render stats format compactly for the debug overlay', () {
+    const stats = GlintRenderStats(
+      framesPerSecond: 60,
+      frameTimeMilliseconds: 4.16,
+      drawCalls: 1,
+      triangleCount: 4212,
+    );
+    expect('$stats', '60 fps • 4.2 ms • 1 draw • 4212 tris');
+  });
+
+  testWidgets('stats overlay builds without a GPU backend', (tester) async {
+    await tester.pumpWidget(
+      const Directionality(
+        textDirection: TextDirection.ltr,
+        child: GlintGpuFirstLight(showStats: true, autoRotate: false),
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(GlintGpuFirstLight), findsOneWidget);
+  });
+
   test('transform applies scale and translation', () {
     const transform = Transform3D(
       position: Vector3(1, 2, 3),

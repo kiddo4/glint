@@ -44,7 +44,7 @@ Deliverable: a spinning, well-lit real glTF model inside the showcase app.
 - [x] Ray construction, mesh intersection, and tap picking
 - [x] HDRI image-based environment lighting
 - [x] Runtime base-color, metallic, and roughness updates
-- Debug overlay for FPS, draw calls, and triangle count
+- [x] Debug overlay for FPS, draw calls, and triangle count
 
 Deliverable: tap product parts and change their materials live.
 

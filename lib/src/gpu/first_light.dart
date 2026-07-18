@@ -349,8 +349,11 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
   Future<ui.Image> _render() async {
     try {
       final stopwatch = Stopwatch()..start();
-      final context = gpu.gpuContext;
+      // Await the asset before anything that can throw synchronously, so a
+      // failed load is always observed here instead of becoming an
+      // unhandled async error.
       final prepared = await _asset;
+      final context = gpu.gpuContext;
       _prepared = prepared;
       final mesh = prepared.mesh;
       final pipeline = _obtainPipeline(context);
@@ -557,6 +560,45 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
           );
         },
         child: viewport,
+      );
+    }
+    if (widget.showStats) {
+      viewport = Stack(
+        fit: StackFit.expand,
+        children: [
+          viewport,
+          Positioned(
+            top: 12,
+            right: 12,
+            child: IgnorePointer(
+              child: ValueListenableBuilder<GlintRenderStats?>(
+                valueListenable: _stats,
+                builder: (_, stats, _) => stats == null
+                    ? const SizedBox.shrink()
+                    : DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xcc10131c),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          child: Text(
+                            '$stats',
+                            style: const TextStyle(
+                              color: Color(0xffc9d1e0),
+                              fontSize: 12,
+                              fontFeatures: [ui.FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ],
       );
     }
     return viewport;

@@ -40,6 +40,7 @@ class _GlintShowcaseState extends State<GlintShowcase> {
             model: const Model.asset('packages/glint/assets/models/duck.glb'),
             environmentAsset: 'packages/glint/assets/environments/studio.hdr',
             material: _presets[_presetIndex].$2,
+            showStats: true,
             fallback: const Center(
               child: Text(
                 'Flutter GPU renderer unavailable.\n'
