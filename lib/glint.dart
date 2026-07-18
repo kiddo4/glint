@@ -6,6 +6,7 @@ export 'src/assets/hdr.dart';
 export 'src/assets/glb.dart';
 export 'src/assets/model.dart';
 export 'src/gpu/first_light.dart';
+export 'src/gpu/game_view.dart';
 export 'src/gpu/render_stats.dart';
 export 'src/labels.dart';
 export 'src/scene.dart';

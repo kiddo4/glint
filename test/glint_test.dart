@@ -199,6 +199,28 @@ void main() {
     expect(mesh.boundsMaximum[2], closeTo(4, 0.0001));
   });
 
+  testWidgets('generated runner props parse with authored materials', (
+    tester,
+  ) async {
+    final box = await tester.runAsync(
+      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/box.glb'),
+    );
+    expect(box!.vertexCount, 24);
+    expect(box.indices, hasLength(36));
+    expect(box.baseColorImageBytes, isNull);
+    expect(box.metallicFactor, 0);
+    expect(box.boundsMinimum[0], closeTo(-.5, 1e-6));
+    expect(box.boundsMaximum[1], closeTo(.5, 1e-6));
+
+    final coin = await tester.runAsync(
+      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/coin.glb'),
+    );
+    expect(coin!.metallicFactor, 1);
+    expect(coin.baseColorFactor[0], closeTo(1, 1e-6));
+    expect(coin.boundsMaximum[0], closeTo(.5, 1e-6));
+    expect(coin.boundsMaximum[2], closeTo(.08, 1e-6));
+  });
+
   testWidgets('real Khronos GLB exposes its embedded material image', (
     tester,
   ) async {

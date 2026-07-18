@@ -29,6 +29,8 @@ flutter:
     - assets/textures/glint-grid.png
     - assets/models/glint-prism.glb
     - assets/models/duck.glb
+    - assets/models/box.glb
+    - assets/models/coin.glb
     - assets/environments/studio.hdr
 
   # To add assets to your package, add an assets section, like this:
