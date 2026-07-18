@@ -68,9 +68,7 @@ void main() {
       const MaterialApp(
         home: Scene3D(
           children: [
-            Node3D(
-              model: Model.asset('packages/glint/assets/models/duck.glb'),
-            ),
+            Node3D(model: Model.asset('packages/glint/assets/models/duck.glb')),
           ],
           autoRotate: false,
         ),
@@ -112,9 +110,7 @@ void main() {
               child: Scene3D(
                 children: [
                   Node3D(
-                    model: Model.asset(
-                      'packages/glint/assets/models/duck.glb',
-                    ),
+                    model: Model.asset('packages/glint/assets/models/duck.glb'),
                   ),
                 ],
                 autoRotate: false,

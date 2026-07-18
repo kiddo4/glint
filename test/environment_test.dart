@@ -97,7 +97,9 @@ void main() {
     // Every radiance blur band preserves a constant field.
     for (var band = 0; band < GlintEnvironment.levelCount; band++) {
       final bandCenter =
-          band * GlintEnvironment.radianceWidth * GlintEnvironment.radianceHeight +
+          band *
+              GlintEnvironment.radianceWidth *
+              GlintEnvironment.radianceHeight +
           GlintEnvironment.radianceHeight ~/
               2 *
               GlintEnvironment.radianceWidth +

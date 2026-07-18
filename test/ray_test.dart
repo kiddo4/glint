@@ -4,11 +4,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 void main() {
   test('unprojecting the NDC center through identity yields a forward ray', () {
-    final ray = GlintRay.fromNdc(
-      0,
-      0,
-      vm.Matrix4.identity().storage.toList(),
-    );
+    final ray = GlintRay.fromNdc(0, 0, vm.Matrix4.identity().storage.toList());
     expect(ray.origin.x, closeTo(0, 1e-9));
     expect(ray.origin.y, closeTo(0, 1e-9));
     expect(ray.origin.z, closeTo(-1, 1e-9));
@@ -66,8 +62,10 @@ void main() {
     expect(above!.y, greaterThan(0));
     // A point behind the camera has no screen position.
     expect(glintProjectToNdc(mvp, const Vector3(0, 0, 10)), isNull);
-    expect(() => glintProjectToNdc(const [1, 2], Vector3.zero),
-        throwsArgumentError);
+    expect(
+      () => glintProjectToNdc(const [1, 2], Vector3.zero),
+      throwsArgumentError,
+    );
   });
 
   testWidgets('the duck occludes anchors on its far side', (tester) async {

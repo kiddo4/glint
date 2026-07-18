@@ -1,5 +1,21 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
+import 'package:glint_showcase/configurator.dart';
 
-import 'aether_tilt.dart';
+void main() => runApp(const ConfiguratorApp());
 
-void main() => runApp(const AetherTiltApp());
+class ConfiguratorApp extends StatelessWidget {
+  const ConfiguratorApp({super.key});
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xffffb000),
+        brightness: Brightness.dark,
+      ),
+    ),
+    home: const ConfiguratorPage(),
+  );
+}

@@ -64,15 +64,18 @@ Deliverable: the public launch demo and video.
 - Device performance validation on macOS, iOS, and mid-range Android
 - Package hygiene and pub.dev release readiness
 
-## Flagship game — Aether Tilt
+## Flagship game — Duck Dash (endless runner)
 
-- [x] Portrait-first Flutter game shell and premium HUD
-- [x] Deterministic gravity-shift simulation with a complete first level
-- [x] Procedural diorama, sphere geometry, collectibles, portal, and victory flow
-- [x] Android and unsigned iOS build validation
-- Animated node-transform API and reusable game clock
-- Per-primitive GPU material batches and imported diorama GLBs
-- Five launch levels, audio/haptics, progression, and device performance pass
+A Subway-Surfers-style lane runner starring the Glint duck, built to prove
+the engine drives real games: many moving objects, a chase camera, and a
+Flutter-widget HUD over a smooth 3D world.
+
+- GlintGameView: multi-instance rendering with per-node transforms
+- Free look-at chase camera independent of orbit gestures
+- Ticker-driven game loop with delta-time updates
+- Procedural crate and coin assets
+- Three-lane runner: swipe steering, obstacles, coins, ramping speed
+- Score/lives HUD, game-over and restart flow, mobile validation
 
 ## Explicitly outside v0.1
 

@@ -175,9 +175,7 @@ class _ConfiguratorPageState extends State<ConfiguratorPage> {
                       ),
                     ),
                     Text(
-                      _finish.isOriginal
-                          ? '—'
-                          : _roughness.toStringAsFixed(2),
+                      _finish.isOriginal ? '—' : _roughness.toStringAsFixed(2),
                       style: theme.textTheme.labelLarge,
                     ),
                   ],
@@ -235,9 +233,7 @@ class _ConfiguratorScene extends Scene {
   List<Light3D> get lights => const [
     AmbientLight(intensity: .26),
     DirectionalLight(direction: Vector3(.55, -1, -.65), intensity: .87),
-    EnvironmentLight(
-      asset: 'packages/glint/assets/environments/studio.hdr',
-    ),
+    EnvironmentLight(asset: 'packages/glint/assets/environments/studio.hdr'),
   ];
 
   @override
