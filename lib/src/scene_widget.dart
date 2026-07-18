@@ -18,6 +18,7 @@ class Scene3D extends StatefulWidget {
     this.autoRotate = false,
     this.rotationSpeed = .55,
     this.enableGestures = true,
+    this.gestureMode = GlintGestureMode.exclusive,
     this.showStats = false,
     this.labels = const <Label3D>[],
     this.onModelTap,
@@ -35,6 +36,11 @@ class Scene3D extends StatefulWidget {
   final bool autoRotate;
   final double rotationSpeed;
   final bool enableGestures;
+
+  /// How the viewport shares drags with enclosing scrollables. Use
+  /// [GlintGestureMode.scrollAware] when this scene sits inside a
+  /// scrolling page.
+  final GlintGestureMode gestureMode;
 
   /// Overlays renderer throughput counters on the GPU path.
   final bool showStats;
@@ -136,6 +142,7 @@ class _Scene3DState extends State<Scene3D> with SingleTickerProviderStateMixin {
           backgroundColor: widget.backgroundColor,
           autoRotate: widget.autoRotate,
           enableGestures: widget.enableGestures,
+          gestureMode: widget.gestureMode,
           showStats: widget.showStats,
           labels: widget.labels,
           onModelTap: widget.onModelTap,

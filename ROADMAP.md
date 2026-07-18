@@ -52,7 +52,7 @@ Deliverable: tap product parts and change their materials live.
 
 - [x] Harden the `Scene3D` public API and hot-reload lifecycle
 - [x] Implement `Label3D` with node-to-screen projection and occlusion policy
-- Resolve Flutter-scroll versus scene-orbit gesture routing
+- [x] Resolve Flutter-scroll versus scene-orbit gesture routing
 - Build the flagship configurator with Flutter controls and anchored labels
 
 Deliverable: the public launch demo and video.

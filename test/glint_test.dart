@@ -91,6 +91,47 @@ void main() {
     expect(find.byType(GlintGpuFirstLight), findsNothing);
   });
 
+  testWidgets('scroll-aware scenes yield vertical drags to the page', (
+    tester,
+  ) async {
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListView(
+          controller: controller,
+          children: [
+            const SizedBox(
+              height: 400,
+              child: Scene3D(
+                children: [
+                  Node3D(
+                    model: Model.asset(
+                      'packages/glint/assets/models/duck.glb',
+                    ),
+                  ),
+                ],
+                autoRotate: false,
+                gestureMode: GlintGestureMode.scrollAware,
+              ),
+            ),
+            const SizedBox(height: 1200),
+          ],
+        ),
+      ),
+    );
+    // A vertical drag over the viewport scrolls the page.
+    await tester.drag(find.byType(Scene3D), const Offset(0, -150));
+    await tester.pumpAndSettle();
+    expect(controller.offset, greaterThan(0));
+    // A horizontal drag orbits instead, leaving the scroll untouched.
+    controller.jumpTo(0);
+    await tester.pump();
+    await tester.drag(find.byType(Scene3D), const Offset(-150, 0));
+    await tester.pumpAndSettle();
+    expect(controller.offset, 0);
+  });
+
   testWidgets('Scene3D composes with Flutter widgets', (tester) async {
     await tester.pumpWidget(
       MaterialApp(

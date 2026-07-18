@@ -17,6 +17,17 @@ import '../math.dart';
 import '../scene.dart';
 import 'render_stats.dart';
 
+/// How the viewport competes with surrounding widgets for drag gestures.
+enum GlintGestureMode {
+  /// The viewport owns every drag. Best when it is not inside a scrollable.
+  exclusive,
+
+  /// Built for scrollable pages: one-finger horizontal drags orbit,
+  /// one-finger vertical drags scroll the page, and two-finger or trackpad
+  /// pinch gestures orbit, pan, and zoom.
+  scrollAware,
+}
+
 /// Glint's first verified asset pass: a textured GLB mesh rendered on the GPU.
 ///
 /// Run an app containing this widget with `flutter run --enable-flutter-gpu`.
@@ -39,6 +50,7 @@ class GlintGpuFirstLight extends StatefulWidget {
     this.backgroundColor = const ui.Color(0xff090b13),
     this.autoRotate = true,
     this.enableGestures = true,
+    this.gestureMode = GlintGestureMode.exclusive,
     this.showStats = false,
     this.labels = const <Label3D>[],
     this.onModelTap,
@@ -80,6 +92,9 @@ class GlintGpuFirstLight extends StatefulWidget {
 
   final bool autoRotate;
   final bool enableGestures;
+
+  /// Gesture arbitration with enclosing scrollables; see [GlintGestureMode].
+  final GlintGestureMode gestureMode;
 
   /// Overlays live FPS, frame time, draw-call, and triangle counters.
   final bool showStats;
@@ -264,6 +279,21 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
   void _stopAutoRotate() {
     _rotationTicker?.dispose();
     _rotationTicker = null;
+  }
+
+  /// The user has taken control: auto-rotate must not fight the drag.
+  void _beginOrbit() {
+    _stopAutoRotate();
+    _resumeTimer?.cancel();
+    _gestureDistance = _distance;
+  }
+
+  void _endOrbit() {
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer(
+      const Duration(milliseconds: 2500),
+      _syncRotationTimer,
+    );
   }
 
   void _syncRotationTimer() {
@@ -558,6 +588,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       },
     );
     if (widget.enableGestures) {
+      final scrollAware = widget.gestureMode == GlintGestureMode.scrollAware;
       viewport = GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: widget.onModelTap == null
@@ -575,12 +606,20 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
           _syncRotationTimer();
           _scheduleRender();
         },
-        onScaleStart: (_) {
-          // The user has taken control: auto-rotate must not fight the drag.
-          _stopAutoRotate();
-          _resumeTimer?.cancel();
-          _gestureDistance = _distance;
-        },
+        // Scroll-aware mode claims one-finger horizontal drags for yaw with
+        // the drag recognizer's tight touch slop, while vertical drags lose
+        // the arena to an enclosing scrollable and the page keeps scrolling.
+        onHorizontalDragStart: !scrollAware ? null : (_) => _beginOrbit(),
+        onHorizontalDragUpdate: !scrollAware
+            ? null
+            : (details) {
+                _yaw += details.delta.dx * .008;
+                _scheduleRender();
+              },
+        onHorizontalDragEnd: !scrollAware ? null : (_) => _endOrbit(),
+        // Two-finger and trackpad-pinch gestures reach the scale recognizer
+        // in both modes; in exclusive mode it also owns one-finger drags.
+        onScaleStart: (_) => _beginOrbit(),
         onScaleUpdate: (details) {
           if (details.pointerCount > 1) {
             _panX += details.focalPointDelta.dx * .004;
@@ -600,13 +639,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
           );
           _scheduleRender();
         },
-        onScaleEnd: (_) {
-          _resumeTimer?.cancel();
-          _resumeTimer = Timer(
-            const Duration(milliseconds: 2500),
-            _syncRotationTimer,
-          );
-        },
+        onScaleEnd: (_) => _endOrbit(),
         child: viewport,
       );
     }
