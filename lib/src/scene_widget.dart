@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'gpu/first_light.dart';
+import 'labels.dart';
 import 'math.dart';
 import 'scene.dart';
 
@@ -18,6 +19,7 @@ class Scene3D extends StatefulWidget {
     this.rotationSpeed = .55,
     this.enableGestures = true,
     this.showStats = false,
+    this.labels = const <Label3D>[],
     this.onModelTap,
     this.gpuFallback,
   }) : assert(
@@ -36,6 +38,9 @@ class Scene3D extends StatefulWidget {
 
   /// Overlays renderer throughput counters on the GPU path.
   final bool showStats;
+
+  /// Widgets anchored to points on the GPU-rendered model.
+  final List<Label3D> labels;
 
   /// Called when a tap lands on a GPU-rendered model.
   final ValueChanged<GlintRayHit>? onModelTap;
@@ -132,6 +137,7 @@ class _Scene3DState extends State<Scene3D> with SingleTickerProviderStateMixin {
           autoRotate: widget.autoRotate,
           enableGestures: widget.enableGestures,
           showStats: widget.showStats,
+          labels: widget.labels,
           onModelTap: widget.onModelTap,
           fallback: widget.gpuFallback,
         ),

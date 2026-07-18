@@ -12,6 +12,7 @@ import '../assets/environment.dart';
 import '../assets/texture_pixels.dart';
 import '../assets/glb.dart';
 import '../assets/model.dart';
+import '../labels.dart';
 import '../math.dart';
 import '../scene.dart';
 import 'render_stats.dart';
@@ -39,6 +40,7 @@ class GlintGpuFirstLight extends StatefulWidget {
     this.autoRotate = true,
     this.enableGestures = true,
     this.showStats = false,
+    this.labels = const <Label3D>[],
     this.onModelTap,
   });
 
@@ -81,6 +83,10 @@ class GlintGpuFirstLight extends StatefulWidget {
 
   /// Overlays live FPS, frame time, draw-call, and triangle counters.
   final bool showStats;
+
+  /// Widgets anchored to points on the model, projected each frame and
+  /// subject to their occlusion policy when the model hides their anchor.
+  final List<Label3D> labels;
 
   /// Called with the nearest struck triangle when a tap lands on the model.
   /// Taps on empty space do not fire. Requires [enableGestures].
@@ -604,12 +610,99 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         child: viewport,
       );
     }
-    if (widget.showStats) {
-      viewport = Stack(
-        fit: StackFit.expand,
-        children: [
-          viewport,
-          Positioned(
+    if (widget.showStats || widget.labels.isNotEmpty) {
+      // Capture the composed viewport by value: the builder closure must not
+      // see the reassigned variable, or the widget becomes its own child.
+      final content = viewport;
+      viewport = LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          fit: StackFit.expand,
+          children: [
+            content,
+            for (final label in widget.labels)
+              ?_buildLabel(label, constraints.biggest),
+            if (widget.showStats) _buildStatsChip(),
+          ],
+        ),
+      );
+    }
+    return viewport;
+  }
+
+  /// Projects a label's mesh-space anchor to widget coordinates and applies
+  /// its occlusion policy. Returns null when the anchor is behind the camera
+  /// or far outside the viewport.
+  Widget? _buildLabel(Label3D label, Size size) {
+    final prepared = _prepared;
+    if (prepared == null || size.isEmpty) return null;
+    final normalized = Vector3(
+      (label.anchor.x - prepared.center.x) * prepared.assetScale,
+      (label.anchor.y - prepared.center.y) * prepared.assetScale,
+      (label.anchor.z - prepared.center.z) * prepared.assetScale,
+    );
+    final ndc = glintProjectToNdc(
+      _modelViewProjection().storage,
+      normalized,
+    );
+    if (ndc == null) return null;
+    // Forward BoxFit.cover mapping: render-texture NDC to widget space.
+    final coverScale = math.max(
+      size.width / widget.width,
+      size.height / widget.height,
+    );
+    final displayedWidth = widget.width * coverScale;
+    final displayedHeight = widget.height * coverScale;
+    final u = (ndc.x + 1) / 2;
+    final v = (1 - ndc.y) / 2;
+    if (u < -.2 || u > 1.2 || v < -.2 || v > 1.2) return null;
+    final position = Offset(
+      (size.width - displayedWidth) / 2 + u * displayedWidth + label.offset.dx,
+      (size.height - displayedHeight) / 2 +
+          v * displayedHeight +
+          label.offset.dy,
+    );
+    var opacity = 1.0;
+    if (label.occlusion != Label3DOcclusion.none &&
+        prepared.mesh.occludes(_cameraInMeshSpace(prepared), label.anchor)) {
+      opacity = label.occlusion == Label3DOcclusion.hide
+          ? 0
+          : label.fadedOpacity;
+    }
+    return Positioned(
+      left: position.dx,
+      top: position.dy,
+      child: FractionalTranslation(
+        translation: const Offset(-.5, -.5),
+        child: IgnorePointer(
+          ignoring: opacity == 0,
+          child: AnimatedOpacity(
+            opacity: opacity,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            child: label.child,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The camera's position expressed in the source mesh's space, for
+  /// occlusion rays against the CPU-side triangle data.
+  Vector3 _cameraInMeshSpace(_PreparedModel prepared) {
+    final inverse = vm.Matrix4.zero();
+    if (inverse.copyInverse(_modelMatrix()) == 0) {
+      return prepared.center;
+    }
+    final camera = inverse.transform3(vm.Vector3(0, 0, _distance));
+    return Vector3(
+      camera.x / prepared.assetScale + prepared.center.x,
+      camera.y / prepared.assetScale + prepared.center.y,
+      camera.z / prepared.assetScale + prepared.center.z,
+    );
+  }
+
+  Widget _buildStatsChip() {
+    return Positioned(
             top: 12,
             right: 12,
             child: IgnorePointer(
@@ -639,11 +732,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
                       ),
               ),
             ),
-          ),
-        ],
-      );
-    }
-    return viewport;
+    );
   }
 }
 

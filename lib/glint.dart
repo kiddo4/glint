@@ -7,5 +7,6 @@ export 'src/assets/glb.dart';
 export 'src/assets/model.dart';
 export 'src/gpu/first_light.dart';
 export 'src/gpu/render_stats.dart';
+export 'src/labels.dart';
 export 'src/scene.dart';
 export 'src/scene_widget.dart';

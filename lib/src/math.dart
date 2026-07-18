@@ -121,6 +121,27 @@ class GlintRay {
   }
 }
 
+/// Projects [point] through a 16-element column-major matrix and returns
+/// normalized device coordinates, or null when the point is at or behind
+/// the projection plane (w <= 0) and has no on-screen position.
+Vector3? glintProjectToNdc(List<double> columnMajorMatrix, Vector3 point) {
+  if (columnMajorMatrix.length != 16) {
+    throw ArgumentError.value(
+      columnMajorMatrix.length,
+      'columnMajorMatrix',
+      'must have 16 elements',
+    );
+  }
+  final m = columnMajorMatrix;
+  final w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
+  if (w <= 0) return null;
+  return Vector3(
+    (m[0] * point.x + m[4] * point.y + m[8] * point.z + m[12]) / w,
+    (m[1] * point.x + m[5] * point.y + m[9] * point.z + m[13]) / w,
+    (m[2] * point.x + m[6] * point.y + m[10] * point.z + m[14]) / w,
+  );
+}
+
 /// The nearest triangle a picking ray struck.
 class GlintRayHit {
   const GlintRayHit({

@@ -45,6 +45,47 @@ void main() {
     expect(inside.intersectsBounds(minimum, maximum), isTrue);
   });
 
+  test('projecting to NDC handles center, offsets, and behind-camera', () {
+    final identity = vm.Matrix4.identity().storage.toList();
+    final centered = glintProjectToNdc(identity, const Vector3(.5, -.25, 0));
+    expect(centered!.x, closeTo(.5, 1e-9));
+    expect(centered.y, closeTo(-.25, 1e-9));
+
+    final projection = vm.makePerspectiveMatrix(
+      37.8 * 3.141592653589793 / 180,
+      1,
+      .1,
+      100,
+    );
+    final view = vm.Matrix4.translationValues(0, 0, -6.4);
+    final mvp = (projection * view as vm.Matrix4).storage.toList();
+    final onAxis = glintProjectToNdc(mvp, Vector3.zero);
+    expect(onAxis!.x, closeTo(0, 1e-9));
+    expect(onAxis.y, closeTo(0, 1e-9));
+    final above = glintProjectToNdc(mvp, const Vector3(0, 1, 0));
+    expect(above!.y, greaterThan(0));
+    // A point behind the camera has no screen position.
+    expect(glintProjectToNdc(mvp, const Vector3(0, 0, 10)), isNull);
+    expect(() => glintProjectToNdc(const [1, 2], Vector3.zero),
+        throwsArgumentError);
+  });
+
+  testWidgets('the duck occludes anchors on its far side', (tester) async {
+    final mesh = await tester.runAsync(
+      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/duck.glb'),
+    );
+    // The beak tip faces +x; seen from the front it is clear, while from
+    // behind the duck's body blocks the line of sight.
+    const beak = Vector3(.96, 1.34, -.12);
+    expect(mesh!.occludes(const Vector3(10, 1.34, -.12), beak), isFalse);
+    expect(mesh.occludes(const Vector3(-10, 1.34, -.12), beak), isTrue);
+    // Nothing between the camera and a point floating off the model.
+    expect(
+      mesh.occludes(const Vector3(10, 5, 0), const Vector3(5, 5, 0)),
+      isFalse,
+    );
+  });
+
   testWidgets('a ray through the Duck GLB reports the nearest surface', (
     tester,
   ) async {

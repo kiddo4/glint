@@ -53,6 +53,21 @@ class _GlintShowcaseState extends State<GlintShowcase> {
             onModelTap: (_) => setState(
               () => _presetIndex = (_presetIndex + 1) % _presets.length,
             ),
+            // Milestone 3: real Flutter widgets pinned to the model, fading
+            // or hiding as their anchor rotates behind the duck.
+            labels: const [
+              Label3D(
+                anchor: Vector3(.96, 1.34, -.12),
+                offset: Offset(0, -30),
+                child: _Chip(text: 'FOOD-GRADE BEAK'),
+              ),
+              Label3D(
+                anchor: Vector3(-.69, .52, -.02),
+                offset: Offset(0, -30),
+                occlusion: Label3DOcclusion.hide,
+                child: _Chip(text: 'TAIL CURL'),
+              ),
+            ],
           ),
           SafeArea(
             child: Padding(

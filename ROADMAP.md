@@ -51,7 +51,7 @@ Deliverable: tap product parts and change their materials live.
 ## Milestone 3 — The Moat (4–6 weeks)
 
 - [x] Harden the `Scene3D` public API and hot-reload lifecycle
-- Implement `Label3D` with node-to-screen projection and occlusion policy
+- [x] Implement `Label3D` with node-to-screen projection and occlusion policy
 - Resolve Flutter-scroll versus scene-orbit gesture routing
 - Build the flagship configurator with Flutter controls and anchored labels
 

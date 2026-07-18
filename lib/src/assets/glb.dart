@@ -85,6 +85,17 @@ class GlintGlbMesh {
     return nearest;
   }
 
+  /// Whether geometry blocks the line of sight from [origin] to [target],
+  /// both in this mesh's space. Surfaces within [tolerance] of the target do
+  /// not count, so anchors sitting on the surface stay visible.
+  bool occludes(Vector3 origin, Vector3 target, {double? tolerance}) {
+    final delta = target - origin;
+    final distance = delta.length;
+    if (distance == 0) return false;
+    final hit = intersectRay(GlintRay(origin, delta * (1 / distance)));
+    return hit != null && hit.distance < distance - (tolerance ?? distance * .01);
+  }
+
   Vector3 _position(int index) => Vector3(
     positions[index * 3],
     positions[index * 3 + 1],
