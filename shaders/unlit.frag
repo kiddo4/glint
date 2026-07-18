@@ -1,15 +1,55 @@
 uniform sampler2D tex;
+uniform sampler2D irradiance_map;
+uniform sampler2D radiance_map;
 
 in vec2 v_texture_coords;
 in vec3 v_normal;
 in vec4 v_base_color;
 in vec4 v_lighting;
 in vec3 v_light_direction;
+in float v_environment;
 in vec3 v_world_position;
 in vec3 v_camera_position;
 out vec4 frag_color;
 
 const float PI = 3.14159265359;
+// Must match GlintEnvironment's atlas layout and RGBM range.
+const float RADIANCE_LEVELS = 5.0;
+const float RGBM_RANGE = 6.0;
+
+vec3 decode_rgbm(vec4 encoded) {
+  return encoded.rgb * encoded.a * RGBM_RANGE;
+}
+
+vec2 equirect_uv(vec3 direction) {
+  return vec2(atan(direction.z, direction.x) / (2.0 * PI) + 0.5,
+      acos(clamp(direction.y, -1.0, 1.0)) / PI);
+}
+
+// Samples the vertically stacked blur bands, interpolating by roughness.
+vec3 sample_radiance(vec3 direction, float roughness) {
+  vec2 uv = equirect_uv(direction);
+  float level = roughness * (RADIANCE_LEVELS - 1.0);
+  float lower = floor(level);
+  float upper = min(lower + 1.0, RADIANCE_LEVELS - 1.0);
+  // Inset by half a band texel so filtering never bleeds across bands.
+  float inset = 0.5 / 64.0;
+  float band_v = clamp(uv.y, inset, 1.0 - inset);
+  vec3 a = decode_rgbm(texture(radiance_map,
+      vec2(uv.x, (lower + band_v) / RADIANCE_LEVELS)));
+  vec3 b = decode_rgbm(texture(radiance_map,
+      vec2(uv.x, (upper + band_v) / RADIANCE_LEVELS)));
+  return mix(a, b, level - lower);
+}
+
+// Lazarov's analytic environment BRDF approximation (no lookup table).
+vec2 environment_brdf(float n_dot_v, float roughness) {
+  vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+  vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  vec4 r = roughness * c0 + c1;
+  float a004 = min(r.x * r.x, exp2(-9.28 * n_dot_v)) * r.x + r.y;
+  return vec2(-1.04, 1.04) * a004 + r.zw;
+}
 
 float distribution_ggx(vec3 n, vec3 h, float roughness) {
   float a = roughness * roughness;
@@ -53,10 +93,25 @@ void main() {
       max(4.0 * n_dot_v * n_dot_l, 0.0001);
   vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo.rgb / PI;
   vec3 direct = (diffuse + specular) * v_lighting.y * n_dot_l;
-  vec3 ambient = albedo.rgb * v_lighting.x;
-  vec3 color = ambient + direct;
-  // Filmic exposure keeps bright yellow saturated without clipping highlights.
-  color = vec3(1.0) - exp(-color * 1.35);
+  vec3 ambient;
+  if (v_environment > 0.001) {
+    // Image-based lighting: cosine-convolved irradiance for diffuse plus
+    // roughness-matched prefiltered radiance for specular reflections.
+    vec3 irradiance = decode_rgbm(texture(irradiance_map, equirect_uv(n)));
+    vec3 diffuse_ibl = irradiance * albedo.rgb * (1.0 - f) * (1.0 - metallic);
+    vec3 reflected = reflect(-v, n);
+    vec2 brdf = environment_brdf(n_dot_v, roughness);
+    vec3 specular_ibl =
+        sample_radiance(reflected, roughness) * (f0 * brdf.x + brdf.y);
+    ambient = (diffuse_ibl + specular_ibl) * v_environment;
+  } else {
+    // Hemisphere ambient: full strength for up-facing normals fading toward
+    // the underside, so surfaces away from the key light still read as
+    // curved form instead of flattening under a constant fill.
+    float sky = 0.5 + 0.5 * n.y;
+    ambient = albedo.rgb * v_lighting.x * mix(0.3, 1.0, sky);
+  }
+  vec3 color = clamp(ambient + direct, 0.0, 1.0);
   color = pow(color, vec3(1.0 / 2.2));
   frag_color = vec4(color, albedo.a);
 }

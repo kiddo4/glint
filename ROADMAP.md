@@ -40,10 +40,10 @@ Deliverable: a spinning, well-lit real glTF model inside the showcase app.
 - [x] Compose node matrix or translation/rotation/scale world transforms
 - [x] Transform mesh positions and normals and expose world-space bounds
 - [x] Aggregate triangle primitives across active mesh-node instances
-- View-frustum culling
-- Ray construction, mesh intersection, and tap picking
-- HDRI image-based environment lighting
-- Runtime base-color, metallic, and roughness updates
+- [x] View-frustum culling
+- [x] Ray construction, mesh intersection, and tap picking
+- [x] HDRI image-based environment lighting
+- [x] Runtime base-color, metallic, and roughness updates
 - Debug overlay for FPS, draw calls, and triangle count
 
 Deliverable: tap product parts and change their materials live.

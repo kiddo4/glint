@@ -3,8 +3,31 @@ import 'package:glint/glint.dart';
 
 void main() => runApp(const GlintShowcase());
 
-class GlintShowcase extends StatelessWidget {
+class GlintShowcase extends StatefulWidget {
   const GlintShowcase({super.key});
+
+  @override
+  State<GlintShowcase> createState() => _GlintShowcaseState();
+}
+
+class _GlintShowcaseState extends State<GlintShowcase> {
+  static const _presets = <(String, Material3D?)>[
+    ('Original vinyl', null),
+    (
+      'Brushed gold',
+      Material3D(color: Color(0xffd9b23a), metallic: 1, roughness: .32),
+    ),
+    (
+      'Cherry gloss',
+      Material3D(color: Color(0xffb01230), metallic: .05, roughness: .12),
+    ),
+    (
+      'Matte slate',
+      Material3D(color: Color(0xff3f4650), metallic: 0, roughness: .85),
+    ),
+  ];
+
+  var _presetIndex = 0;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -13,14 +36,20 @@ class GlintShowcase extends StatelessWidget {
     home: Scaffold(
       body: Stack(
         children: [
-          const GlintGpuFirstLight(
-            model: Model.asset('packages/glint/assets/models/duck.glb'),
-            fallback: Center(
+          GlintGpuFirstLight(
+            model: const Model.asset('packages/glint/assets/models/duck.glb'),
+            environmentAsset: 'packages/glint/assets/environments/studio.hdr',
+            material: _presets[_presetIndex].$2,
+            fallback: const Center(
               child: Text(
                 'Flutter GPU renderer unavailable.\n'
                 'Launch with --enable-impeller --enable-flutter-gpu.',
                 textAlign: TextAlign.center,
               ),
+            ),
+            // Milestone 2 deliverable: tap the product, restyle it live.
+            onModelTap: (_) => setState(
+              () => _presetIndex = (_presetIndex + 1) % _presets.length,
             ),
           ),
           SafeArea(
@@ -44,21 +73,12 @@ class GlintShowcase extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: .35),
-                      borderRadius: BorderRadius.circular(99),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      child: Text(
-                        'DRAG ORBIT  •  PINCH ZOOM  •  TWO-FINGER PAN',
-                      ),
-                    ),
+                  _Chip(text: 'FINISH  •  ${_presets[_presetIndex].$1}'),
+                  const SizedBox(height: 12),
+                  const _Chip(
+                    text:
+                        'TAP DUCK RESTYLE  •  DRAG ORBIT  •  PINCH ZOOM  •  '
+                        'TWO-FINGER PAN',
                   ),
                 ],
               ),
@@ -66,6 +86,25 @@ class GlintShowcase extends StatelessWidget {
           ),
         ],
       ),
+    ),
+  );
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.black.withValues(alpha: .35),
+      borderRadius: BorderRadius.circular(99),
+      border: Border.all(color: Colors.white12),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Text(text),
     ),
   );
 }

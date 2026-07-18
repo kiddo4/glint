@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
+import '../math.dart';
+
 /// Triangle geometry aggregated from the active scene of a binary glTF asset.
 class GlintGlbMesh {
   const GlintGlbMesh({
@@ -54,6 +56,40 @@ class GlintGlbMesh {
   final List<double> boundsMaximum;
 
   int get vertexCount => positions.length ~/ 3;
+
+  /// Intersects a ray in this mesh's space against every triangle and returns
+  /// the nearest hit, or null when the ray misses the mesh entirely.
+  GlintRayHit? intersectRay(GlintRay ray) {
+    if (!ray.intersectsBounds(
+      Vector3(boundsMinimum[0], boundsMinimum[1], boundsMinimum[2]),
+      Vector3(boundsMaximum[0], boundsMaximum[1], boundsMaximum[2]),
+    )) {
+      return null;
+    }
+    GlintRayHit? nearest;
+    for (var i = 0; i + 2 < indices.length; i += 3) {
+      final distance = ray.intersectTriangle(
+        _position(indices[i]),
+        _position(indices[i + 1]),
+        _position(indices[i + 2]),
+      );
+      if (distance != null &&
+          (nearest == null || distance < nearest.distance)) {
+        nearest = GlintRayHit(
+          distance: distance,
+          position: ray.origin + ray.direction * distance,
+          triangleIndex: i ~/ 3,
+        );
+      }
+    }
+    return nearest;
+  }
+
+  Vector3 _position(int index) => Vector3(
+    positions[index * 3],
+    positions[index * 3 + 1],
+    positions[index * 3 + 2],
+  );
 
   /// Loads a GLB from a Flutter asset bundle.
   static Future<GlintGlbMesh> fromAsset(

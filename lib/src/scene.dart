@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'math.dart';
@@ -62,6 +64,27 @@ class Material3D {
   final double metallic;
   final double roughness;
   final double opacity;
+
+  /// This material as a glTF-style linear RGBA base-color factor.
+  /// [color] is sRGB, as all Flutter colors are, so the channels are
+  /// linearized before they can scale linear-space lighting.
+  List<double> get linearBaseColorFactor => [
+    math.pow(color.r, 2.2).toDouble(),
+    math.pow(color.g, 2.2).toDouble(),
+    math.pow(color.b, 2.2).toDouble(),
+    color.a * opacity,
+  ];
+
+  @override
+  bool operator ==(Object other) =>
+      other is Material3D &&
+      other.color == color &&
+      other.metallic == metallic &&
+      other.roughness == roughness &&
+      other.opacity == opacity;
+
+  @override
+  int get hashCode => Object.hash(color, metallic, roughness, opacity);
 }
 
 class Mesh3D {

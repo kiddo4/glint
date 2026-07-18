@@ -6,6 +6,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:glint/glint.dart';
 
 void main() {
+  test('material converts sRGB color to a linear glTF factor', () {
+    const white = Material3D(color: Color(0xffffffff));
+    expect(white.linearBaseColorFactor, [1, 1, 1, 1]);
+    const black = Material3D(color: Color(0xff000000), opacity: .5);
+    final blackFactor = black.linearBaseColorFactor;
+    expect(blackFactor[0], 0);
+    expect(blackFactor[3], closeTo(.5, 1e-6));
+    const gray = Material3D(color: Color(0xff808080));
+    // sRGB mid-gray is ~21.6% linear, the classic gamma-2.2 checkpoint.
+    expect(gray.linearBaseColorFactor[1], closeTo(.216, .005));
+  });
+
+  test('materials with equal fields compare equal for rebuild detection', () {
+    const a = Material3D(color: Color(0xffd9b23a), metallic: 1, roughness: .3);
+    const b = Material3D(color: Color(0xffd9b23a), metallic: 1, roughness: .3);
+    expect(a, b);
+    expect(a.hashCode, b.hashCode);
+    expect(a, isNot(const Material3D(color: Color(0xffd9b23a), metallic: 0)));
+  });
+
   test('transform applies scale and translation', () {
     const transform = Transform3D(
       position: Vector3(1, 2, 3),

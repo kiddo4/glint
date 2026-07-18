@@ -16,6 +16,7 @@ out vec3 v_normal;
 out vec4 v_base_color;
 out vec4 v_lighting;
 out vec3 v_light_direction;
+out float v_environment;
 out vec3 v_world_position;
 out vec3 v_camera_position;
 
@@ -25,6 +26,7 @@ void main() {
   v_base_color = vert_info.base_color;
   v_lighting = vert_info.lighting;
   v_light_direction = normalize(vert_info.light_direction.xyz);
+  v_environment = vert_info.light_direction.w;
   v_world_position = (vert_info.model * vec4(position, 1.0)).xyz;
   v_camera_position = vert_info.camera_position.xyz;
   gl_Position = vert_info.mvp * vec4(position, 1.0);
