@@ -55,6 +55,42 @@ void main() {
     expect(transform.apply(const Vector3(1, 1, 1)), const Vector3(3, 4, 5));
   });
 
+  testWidgets('Scene3D routes model scenes to the GPU renderer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scene3D(
+          children: [
+            Node3D(
+              model: Model.asset('packages/glint/assets/models/duck.glb'),
+            ),
+          ],
+          autoRotate: false,
+        ),
+      ),
+    );
+    expect(find.byType(GlintGpuFirstLight), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(Scene3D),
+        matching: find.byType(CustomPaint),
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('Scene3D keeps mesh-only scenes on the preview painter', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scene3D(children: [Node3D(mesh: Mesh3D.cube())]),
+      ),
+    );
+    expect(find.byType(GlintGpuFirstLight), findsNothing);
+  });
+
   testWidgets('Scene3D composes with Flutter widgets', (tester) async {
     await tester.pumpWidget(
       MaterialApp(

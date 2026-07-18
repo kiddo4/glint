@@ -30,6 +30,12 @@ class GlintGpuFirstLight extends StatefulWidget {
     this.model = const Model.asset('packages/glint/assets/models/duck.glb'),
     this.environmentAsset,
     this.material,
+    this.fieldOfViewDegrees = 37.8,
+    this.initialDistance = 6.4,
+    this.lightDirection = const Vector3(.55, -1, -.65),
+    this.lightIntensity = 2.6,
+    this.ambientIntensity = .26,
+    this.backgroundColor = const ui.Color(0xff090b13),
     this.autoRotate = true,
     this.enableGestures = true,
     this.showStats = false,
@@ -51,6 +57,24 @@ class GlintGpuFirstLight extends StatefulWidget {
   /// render time. Swapping this re-renders immediately without reloading
   /// geometry or textures; null restores the glTF material factors.
   final Material3D? material;
+
+  /// Vertical field of view; the default matches Duck.glb's authored camera.
+  final double fieldOfViewDegrees;
+
+  /// Starting orbit distance in normalized model units (the largest model
+  /// extent spans 2.5). Zoom stays within 0.6–2x of this.
+  final double initialDistance;
+
+  /// World-space direction the key light travels, normalized in the shader.
+  final Vector3 lightDirection;
+
+  /// Key light strength; roughly 3x a [DirectionalLight] intensity.
+  final double lightIntensity;
+
+  /// Hemisphere ambient strength, used only without an environment.
+  final double ambientIntensity;
+
+  final ui.Color backgroundColor;
 
   final bool autoRotate;
   final bool enableGestures;
@@ -76,7 +100,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
   final _stats = ValueNotifier<GlintRenderStats?>(null);
   final _frameTimestamps = <int>[];
   static const double _initialPitch = -.18;
-  static const double _initialDistance = 6.4;
 
   Ticker? _rotationTicker;
   Duration _lastTick = Duration.zero;
@@ -84,8 +107,8 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
   gpu.RenderPipeline? _pipeline;
   double _yaw = 0;
   double _pitch = _initialPitch;
-  double _distance = _initialDistance;
-  double _gestureDistance = _initialDistance;
+  late double _distance = widget.initialDistance;
+  late double _gestureDistance = widget.initialDistance;
   double _panX = 0;
   double _panY = 0;
   bool _rendering = false;
@@ -96,6 +119,14 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     _asset = _loadAsset();
     _image = _render();
     _syncRotationTimer();
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    // Hot reload: pick up edited scene parameters and shaders immediately.
+    _pipeline = null;
+    _scheduleRender();
   }
 
   @override
@@ -113,7 +144,12 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     if (oldWidget.autoRotate != widget.autoRotate) {
       _syncRotationTimer();
     }
-    if (oldWidget.material != widget.material) {
+    if (oldWidget.material != widget.material ||
+        oldWidget.fieldOfViewDegrees != widget.fieldOfViewDegrees ||
+        oldWidget.lightDirection != widget.lightDirection ||
+        oldWidget.lightIntensity != widget.lightIntensity ||
+        oldWidget.ambientIntensity != widget.ambientIntensity ||
+        oldWidget.backgroundColor != widget.backgroundColor) {
       _scheduleRender();
     }
   }
@@ -288,10 +324,10 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
   /// The camera matrix for the current orbit state, shared by rendering and
   /// tap picking so both always agree on what is on screen.
   vm.Matrix4 _modelViewProjection() {
-    // Match the narrow lens of Duck.glb's authored camera (yfov ~37.8°);
-    // a wide FOV up close fisheyes the model at head-on yaw angles.
+    // The default 37.8° matches Duck.glb's authored camera; a wide FOV up
+    // close fisheyes the model at head-on yaw angles.
     final projection = vm.makePerspectiveMatrix(
-      37.8 * 3.141592653589793 / 180,
+      widget.fieldOfViewDegrees * 3.141592653589793 / 180,
       widget.width / widget.height,
       .1,
       100,
@@ -372,7 +408,12 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       final target = gpu.RenderTarget.singleColor(
         gpu.ColorAttachment(
           texture: texture,
-          clearValue: vm.Vector4(9 / 255, 11 / 255, 19 / 255, 1),
+          clearValue: vm.Vector4(
+            widget.backgroundColor.r,
+            widget.backgroundColor.g,
+            widget.backgroundColor.b,
+            widget.backgroundColor.a,
+          ),
         ),
         depthStencilAttachment: gpu.DepthStencilAttachment(
           texture: depthTexture,
@@ -417,16 +458,14 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             ...mvp.storage,
             ...model.storage,
             ...material?.linearBaseColorFactor ?? mesh.baseColorFactor,
-            // Key light rakes in from the upper left, matching the Khronos
-            // sample viewer, so form shading stays visible while orbiting.
-            // The fourth component switches the shader to image-based
+            // The fourth light component switches the shader to image-based
             // ambient lighting when an environment is loaded.
-            .55,
-            -1,
-            -.65,
+            widget.lightDirection.x,
+            widget.lightDirection.y,
+            widget.lightDirection.z,
             prepared.environmentStrength,
-            .26,
-            2.6,
+            widget.ambientIntensity,
+            widget.lightIntensity,
             material?.metallic ?? mesh.metallicFactor,
             material?.roughness ?? mesh.roughnessFactor,
             0,
@@ -523,8 +562,8 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
           _resumeTimer?.cancel();
           _yaw = 0;
           _pitch = _initialPitch;
-          _distance = _initialDistance;
-          _gestureDistance = _initialDistance;
+          _distance = widget.initialDistance;
+          _gestureDistance = widget.initialDistance;
           _panX = 0;
           _panY = 0;
           _syncRotationTimer();
@@ -549,7 +588,10 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
               1.05,
             );
           }
-          _distance = (_gestureDistance / details.scale).clamp(4, 13);
+          _distance = (_gestureDistance / details.scale).clamp(
+            widget.initialDistance * .6,
+            widget.initialDistance * 2,
+          );
           _scheduleRender();
         },
         onScaleEnd: (_) {

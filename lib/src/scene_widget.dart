@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import 'gpu/first_light.dart';
 import 'math.dart';
 import 'scene.dart';
 
@@ -16,6 +17,9 @@ class Scene3D extends StatefulWidget {
     this.autoRotate = false,
     this.rotationSpeed = .55,
     this.enableGestures = true,
+    this.showStats = false,
+    this.onModelTap,
+    this.gpuFallback,
   }) : assert(
          scene != null || children != null,
          'Provide a scene or children.',
@@ -29,6 +33,17 @@ class Scene3D extends StatefulWidget {
   final bool autoRotate;
   final double rotationSpeed;
   final bool enableGestures;
+
+  /// Overlays renderer throughput counters on the GPU path.
+  final bool showStats;
+
+  /// Called when a tap lands on a GPU-rendered model.
+  final ValueChanged<GlintRayHit>? onModelTap;
+
+  /// Shown when the scene needs the GPU renderer but Flutter GPU is
+  /// unavailable; pair with launching via --enable-impeller
+  /// --enable-flutter-gpu.
+  final Widget? gpuFallback;
 
   @override
   State<Scene3D> createState() => _Scene3DState();
@@ -70,6 +85,16 @@ class _Scene3DState extends State<Scene3D> with SingleTickerProviderStateMixin {
     super.dispose();
   }
 
+  /// Depth-first search for the first node carrying a real model asset.
+  Node3D? _findModelNode(List<Node3D> nodes) {
+    for (final node in nodes) {
+      if (node.model != null) return node;
+      final child = _findModelNode(node.children);
+      if (child != null) return child;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final camera = widget.camera ?? widget.scene?.camera ?? const OrbitCamera();
@@ -78,6 +103,41 @@ class _Scene3DState extends State<Scene3D> with SingleTickerProviderStateMixin {
         widget.scene?.lights ??
         const [AmbientLight(), DirectionalLight()];
     final children = widget.children ?? widget.scene?.children ?? const [];
+
+    // Scenes with real model assets render on the GPU; mesh-only scenes keep
+    // the dependency-free CPU preview painter.
+    final modelNode = _findModelNode(children);
+    if (modelNode != null) {
+      final directional = lights.whereType<DirectionalLight>().firstOrNull;
+      final ambient = lights.whereType<AmbientLight>().fold<double>(
+        0,
+        (sum, light) => sum + light.intensity,
+      );
+      final environment = lights.whereType<EnvironmentLight>().firstOrNull;
+      final perspective = camera is PerspectiveCamera ? camera : null;
+      return ClipRect(
+        child: GlintGpuFirstLight(
+          model: modelNode.model!,
+          material: modelNode.material,
+          environmentAsset: environment?.asset,
+          fieldOfViewDegrees: perspective?.fieldOfView ?? 37.8,
+          initialDistance: camera.position.length,
+          lightDirection:
+              directional?.direction ?? const Vector3(.55, -1, -.65),
+          // The GPU's physically based direct term runs ~3x hotter than the
+          // preview painter's normalized intensities.
+          lightIntensity: (directional?.intensity ?? .85) * 3,
+          ambientIntensity: ambient,
+          backgroundColor: widget.backgroundColor,
+          autoRotate: widget.autoRotate,
+          enableGestures: widget.enableGestures,
+          showStats: widget.showStats,
+          onModelTap: widget.onModelTap,
+          fallback: widget.gpuFallback,
+        ),
+      );
+    }
+
     final time = _clock.lastElapsedDuration?.inMicroseconds ?? 0;
     final autoYaw =
         time / Duration.microsecondsPerSecond * widget.rotationSpeed;
@@ -193,7 +253,8 @@ class _ScenePainter extends CustomPainter {
               source.intensity;
         }
         light = light.clamp(.08, 1.15);
-        final base = node.material.color;
+        final material = node.material ?? const Material3D();
+        final base = material.color;
         output.add(
           _Face(
             projected.cast<Offset>(),
@@ -202,7 +263,7 @@ class _ScenePainter extends CustomPainter {
               (base.r * 255 * light).clamp(0, 255).round(),
               (base.g * 255 * light).clamp(0, 255).round(),
               (base.b * 255 * light).clamp(0, 255).round(),
-              node.material.opacity,
+              material.opacity,
             ),
           ),
         );

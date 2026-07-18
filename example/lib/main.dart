@@ -36,12 +36,13 @@ class _GlintShowcaseState extends State<GlintShowcase> {
     home: Scaffold(
       body: Stack(
         children: [
-          GlintGpuFirstLight(
-            model: const Model.asset('packages/glint/assets/models/duck.glb'),
-            environmentAsset: 'packages/glint/assets/environments/studio.hdr',
-            material: _presets[_presetIndex].$2,
+          // The engine's whole pitch in one expression: a declarative scene
+          // in the widget tree, GPU-rendered.
+          Scene3D(
+            scene: ProductShowroom(finish: _presets[_presetIndex].$2),
+            autoRotate: true,
             showStats: true,
-            fallback: const Center(
+            gpuFallback: const Center(
               child: Text(
                 'Flutter GPU renderer unavailable.\n'
                 'Launch with --enable-impeller --enable-flutter-gpu.',
@@ -111,19 +112,26 @@ class _Chip extends StatelessWidget {
 }
 
 class ProductShowroom extends Scene {
-  const ProductShowroom();
+  const ProductShowroom({this.finish});
+
+  /// Overrides the duck's authored vinyl; null keeps the original.
+  final Material3D? finish;
+
+  @override
+  List<Light3D> get lights => const [
+    AmbientLight(intensity: .26),
+    DirectionalLight(direction: Vector3(.55, -1, -.65), intensity: .87),
+    EnvironmentLight(
+      asset: 'packages/glint/assets/environments/studio.hdr',
+    ),
+  ];
 
   @override
   List<Node3D> get children => [
     Node3D(
       name: 'product',
-      mesh: Mesh3D.cube(size: 2.4),
-      transform: const Transform3D(rotation: Vector3(.25, 0, .12)),
-      material: const Material3D(
-        color: Color(0xffffb000),
-        metallic: .65,
-        roughness: .2,
-      ),
+      model: const Model.asset('packages/glint/assets/models/duck.glb'),
+      material: finish,
     ),
   ];
 }

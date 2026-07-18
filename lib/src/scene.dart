@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'assets/model.dart';
 import 'math.dart';
 
 abstract class Camera3D {
@@ -12,7 +13,8 @@ abstract class Camera3D {
 class PerspectiveCamera extends Camera3D {
   const PerspectiveCamera({
     super.position,
-    this.fieldOfView = 55,
+    // Product-photography default; wide lenses fisheye close-up models.
+    this.fieldOfView = 37.8,
     this.near = 0.1,
     this.far = 100,
   });
@@ -51,6 +53,14 @@ class DirectionalLight extends Light3D {
     super.intensity = .85,
   });
   final Vector3 direction;
+}
+
+/// Image-based lighting from an equirectangular `.hdr` (or PNG/JPEG) asset.
+/// When present in a scene's lights, the GPU renderer replaces its ambient
+/// term with the environment's irradiance and reflections.
+class EnvironmentLight extends Light3D {
+  const EnvironmentLight({required this.asset, super.intensity = 1});
+  final String asset;
 }
 
 class Material3D {
@@ -122,13 +132,23 @@ class Node3D {
     this.name,
     this.transform = const Transform3D(),
     this.mesh,
-    this.material = const Material3D(),
+    this.model,
+    this.material,
     this.children = const [],
   });
   final String? name;
   final Transform3D transform;
+
+  /// Prototype geometry rendered by the CPU preview painter.
   final Mesh3D? mesh;
-  final Material3D material;
+
+  /// A real asset rendered by the GPU renderer. A scene containing any
+  /// model node is routed to the GPU path by [Scene3D].
+  final Model? model;
+
+  /// Surface override. Null keeps a [model]'s own authored material, or the
+  /// default preview material for prototype meshes.
+  final Material3D? material;
   final List<Node3D> children;
 }
 
