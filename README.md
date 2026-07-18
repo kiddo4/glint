@@ -44,6 +44,11 @@ cd example
 flutter run -d macos --enable-impeller --enable-flutter-gpu
 ```
 
+The example now launches **Aether Tilt**, a portrait gravity-puzzle game built
+with a Glint procedural 3D scene and ordinary Flutter HUD. See
+[docs/AETHER_TILT.md](docs/AETHER_TILT.md) for the game direction and first
+playable scope.
+
 ## v1 scope
 
 - `flutter_gpu` rendering on macOS, iOS, and Android

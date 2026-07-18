@@ -55,6 +55,12 @@ void main() {
     expect(transform.apply(const Vector3(1, 1, 1)), const Vector3(3, 4, 5));
   });
 
+  test('procedural sphere produces closed preview geometry', () {
+    final sphere = Mesh3D.sphere(segments: 12, rings: 6);
+    expect(sphere.vertices, hasLength(84));
+    expect(sphere.faces, hasLength(72));
+  });
+
   testWidgets('Scene3D routes model scenes to the GPU renderer', (
     tester,
   ) async {

@@ -64,6 +64,16 @@ Deliverable: the public launch demo and video.
 - Device performance validation on macOS, iOS, and mid-range Android
 - Package hygiene and pub.dev release readiness
 
+## Flagship game — Aether Tilt
+
+- [x] Portrait-first Flutter game shell and premium HUD
+- [x] Deterministic gravity-shift simulation with a complete first level
+- [x] Procedural diorama, sphere geometry, collectibles, portal, and victory flow
+- [x] Android and unsigned iOS build validation
+- Animated node-transform API and reusable game clock
+- Per-primitive GPU material batches and imported diorama GLBs
+- Five launch levels, audio/haptics, progression, and device performance pass
+
 ## Explicitly outside v0.1
 
 Skeletal animation, point/spot lights, shadows, physics, particles, audio, KTX,

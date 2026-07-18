@@ -125,6 +125,44 @@ class Mesh3D {
       ],
     );
   }
+
+  /// A UV sphere suitable for lightweight procedural previews and game pieces.
+  factory Mesh3D.sphere({
+    double radius = 1,
+    int segments = 16,
+    int rings = 10,
+  }) {
+    assert(segments >= 3);
+    assert(rings >= 2);
+    final vertices = <Vector3>[];
+    final faces = <List<int>>[];
+    for (var ring = 0; ring <= rings; ring++) {
+      final latitude = math.pi * ring / rings;
+      final y = math.cos(latitude) * radius;
+      final ringRadius = math.sin(latitude) * radius;
+      for (var segment = 0; segment < segments; segment++) {
+        final longitude = math.pi * 2 * segment / segments;
+        vertices.add(
+          Vector3(
+            math.cos(longitude) * ringRadius,
+            y,
+            math.sin(longitude) * ringRadius,
+          ),
+        );
+      }
+    }
+    for (var ring = 0; ring < rings; ring++) {
+      for (var segment = 0; segment < segments; segment++) {
+        final next = (segment + 1) % segments;
+        final a = ring * segments + segment;
+        final b = ring * segments + next;
+        final c = (ring + 1) * segments + next;
+        final d = (ring + 1) * segments + segment;
+        faces.add([a, b, c, d]);
+      }
+    }
+    return Mesh3D(vertices: vertices, faces: faces);
+  }
 }
 
 class Node3D {

@@ -1,19 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:glint/glint.dart';
+import 'package:glint_showcase/aether_tilt.dart';
 import 'package:glint_showcase/configurator.dart';
-import 'package:glint_showcase/main.dart';
 
 void main() {
-  testWidgets('showcase embeds Glint First Light', (tester) async {
-    await tester.pumpWidget(const GlintShowcase());
-    expect(find.byType(GlintGpuFirstLight), findsOneWidget);
-    expect(find.text('3D belongs in the widget tree.'), findsOneWidget);
+  test('first level has a complete gravity-shift solution', () {
+    final game = AetherGame();
+    expect(game.tilt(TiltDirection.right), isNotEmpty);
+    expect(game.tilt(TiltDirection.up), isNotEmpty);
+    expect(game.tilt(TiltDirection.left), isNotEmpty);
+    expect(game.tilt(TiltDirection.right), isNotEmpty);
+    expect(game.won, isTrue);
+    expect(game.collectedShards, 3);
+    expect(game.moves, 4);
   });
 
-  testWidgets('configurator swatches restyle the product live', (
-    tester,
-  ) async {
+  testWidgets('Aether Tilt presents a playable portrait HUD', (tester) async {
+    tester.view.physicalSize = const Size(430, 932);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const AetherTiltApp());
+    expect(find.text('AETHER TILT'), findsOneWidget);
+    expect(find.textContaining('THE FIRST SIGNAL'), findsOneWidget);
+    expect(find.byType(Scene3D), findsOneWidget);
+    expect(find.byKey(const ValueKey('tilt-right')), findsOneWidget);
+    expect(find.text('0/3'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('tilt-right')));
+    await tester.pumpAndSettle();
+    expect(find.text('1/3'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
+  });
+
+  testWidgets('configurator swatches restyle the product live', (tester) async {
     tester.view.physicalSize = const Size(800, 1800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
