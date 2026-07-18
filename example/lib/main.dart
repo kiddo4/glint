@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:glint/glint.dart';
 
+import 'configurator.dart';
+
 void main() => runApp(const GlintShowcase());
 
 class GlintShowcase extends StatefulWidget {
@@ -32,7 +34,13 @@ class _GlintShowcaseState extends State<GlintShowcase> {
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
-    theme: ThemeData.dark(useMaterial3: true),
+    theme: ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xffffb000),
+        brightness: Brightness.dark,
+      ),
+    ),
     home: Scaffold(
       body: Stack(
         children: [
@@ -90,6 +98,17 @@ class _GlintShowcaseState extends State<GlintShowcase> {
                     ),
                   ),
                   const Spacer(),
+                  Builder(
+                    builder: (context) => FilledButton.tonal(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ConfiguratorPage(),
+                        ),
+                      ),
+                      child: const Text('Open configurator'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   _Chip(text: 'FINISH  •  ${_presets[_presetIndex].$1}'),
                   const SizedBox(height: 12),
                   const _Chip(
