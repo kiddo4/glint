@@ -31,3 +31,6 @@ migrate_working_dir/
 /coverage/
 
 .claude/
+
+# Glint website is maintained as a separate repository.
+/website/
