@@ -291,7 +291,6 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
             GlintGameView(
               models: _models,
               onFrame: _buildFrame,
-              showStats: true,
               environmentAsset: 'packages/glint/assets/environments/dawn.hdr',
               backgroundColor: _haze,
               fogColor: _haze,
