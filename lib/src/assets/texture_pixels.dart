@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
@@ -31,10 +32,13 @@ class GlintTexturePixels {
     }
   }
 
-  /// Decodes encoded PNG or JPEG bytes to RGBA8 pixels.
+  /// Decodes encoded PNG or JPEG bytes to RGBA8 pixels. When
+  /// [maximumDimension] is set, larger images are downscaled to fit it —
+  /// UV mapping is unaffected and GPU memory stays bounded.
   static Future<GlintTexturePixels> decode(
     Uint8List encoded, {
     String debugLabel = 'texture',
+    int? maximumDimension,
   }) async {
     if (!_hasPngSignature(encoded) && !_hasJpegSignature(encoded)) {
       throw GlintTextureException(
@@ -45,7 +49,23 @@ class GlintTexturePixels {
     ui.Codec? codec;
     ui.Image? image;
     try {
-      codec = await ui.instantiateImageCodec(encoded);
+      if (maximumDimension == null) {
+        codec = await ui.instantiateImageCodec(encoded);
+      } else {
+        final buffer = await ui.ImmutableBuffer.fromUint8List(encoded);
+        final descriptor = await ui.ImageDescriptor.encoded(buffer);
+        final scale =
+            maximumDimension /
+            math.max(1, math.max(descriptor.width, descriptor.height));
+        codec = await descriptor.instantiateCodec(
+          targetWidth: scale >= 1
+              ? descriptor.width
+              : (descriptor.width * scale).round(),
+          targetHeight: scale >= 1
+              ? descriptor.height
+              : (descriptor.height * scale).round(),
+        );
+      }
       final frame = await codec.getNextFrame();
       image = frame.image;
       final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);

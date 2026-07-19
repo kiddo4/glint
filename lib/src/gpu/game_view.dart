@@ -128,7 +128,8 @@ class _GlintGameViewState extends State<GlintGameView>
   @override
   void initState() {
     super.initState();
-    _assets = _loadAssets();
+    // ignore() marks early rejections handled; _render still observes them.
+    _assets = _loadAssets()..ignore();
     _ticker = createTicker(_onTick)..start();
   }
 
@@ -144,7 +145,7 @@ class _GlintGameViewState extends State<GlintGameView>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.models != widget.models ||
         oldWidget.environmentAsset != widget.environmentAsset) {
-      _assets = _loadAssets();
+      _assets = _loadAssets()..ignore();
       _failed = false;
     }
   }
@@ -168,8 +169,10 @@ class _GlintGameViewState extends State<GlintGameView>
     setState(() {
       _image = next;
     });
-    next.then(
-      (_) => _rendering = false,
+    next.then<void>(
+      (_) {
+        _rendering = false;
+      },
       onError: (Object _) {
         _rendering = false;
         _failed = true;
@@ -325,61 +328,65 @@ class _GlintGameViewState extends State<GlintGameView>
           ),
           model.vertexCount,
         );
-        pass.bindIndexBuffer(
-          gpu.BufferView(
-            model.indexBuffer,
-            offsetInBytes: 0,
-            lengthInBytes: model.indexByteLength,
-          ),
-          model.indexType,
-          model.indexCount,
-        );
         final material = instance.material;
-        pass.bindUniform(
-          pipeline.vertexShader.getUniformSlot('VertInfo'),
-          hostBuffer.emplace(
-            _floats([
-              ...mvp.storage,
-              ...world.storage,
-              ...material?.linearBaseColorFactor ??
-                  model.mesh.baseColorFactor,
-              widget.lightDirection.x,
-              widget.lightDirection.y,
-              widget.lightDirection.z,
-              assets.environmentStrength,
-              widget.ambientIntensity,
-              widget.lightIntensity,
-              material?.metallic ?? model.mesh.metallicFactor,
-              material?.roughness ?? model.mesh.roughnessFactor,
-              camera.position.x,
-              camera.position.y,
-              camera.position.z,
-              0,
-              ...fogUniform,
-            ]),
-          ),
-        );
-        pass.bindTexture(
-          pipeline.fragmentShader.getUniformSlot('tex'),
-          model.baseColorTexture,
-          sampler: gpu.SamplerOptions(
-            minFilter: gpu.MinMagFilter.linear,
-            magFilter: gpu.MinMagFilter.linear,
-            widthAddressMode: gpu.SamplerAddressMode.repeat,
-            heightAddressMode: gpu.SamplerAddressMode.repeat,
-          ),
-        );
-        pass.bindTexture(
-          pipeline.fragmentShader.getUniformSlot('irradiance_map'),
-          assets.irradianceTexture,
-          sampler: environmentSampler,
-        );
-        pass.bindTexture(
-          pipeline.fragmentShader.getUniformSlot('radiance_map'),
-          assets.radianceTexture,
-          sampler: environmentSampler,
-        );
-        pass.draw();
+        // One draw per material batch; an instance material override wins
+        // over every submesh's authored factors.
+        for (final submesh in model.submeshes) {
+          pass.bindIndexBuffer(
+            gpu.BufferView(
+              model.indexBuffer,
+              offsetInBytes: submesh.indexOffset * model.indexByteSize,
+              lengthInBytes: submesh.indexCount * model.indexByteSize,
+            ),
+            model.indexType,
+            submesh.indexCount,
+          );
+          pass.bindUniform(
+            pipeline.vertexShader.getUniformSlot('VertInfo'),
+            hostBuffer.emplace(
+              _floats([
+                ...mvp.storage,
+                ...world.storage,
+                ...material?.linearBaseColorFactor ??
+                    submesh.baseColorFactor,
+                widget.lightDirection.x,
+                widget.lightDirection.y,
+                widget.lightDirection.z,
+                assets.environmentStrength,
+                widget.ambientIntensity,
+                widget.lightIntensity,
+                material?.metallic ?? submesh.metallicFactor,
+                material?.roughness ?? submesh.roughnessFactor,
+                camera.position.x,
+                camera.position.y,
+                camera.position.z,
+                0,
+                ...fogUniform,
+              ]),
+            ),
+          );
+          pass.bindTexture(
+            pipeline.fragmentShader.getUniformSlot('tex'),
+            submesh.texture,
+            sampler: gpu.SamplerOptions(
+              minFilter: gpu.MinMagFilter.linear,
+              magFilter: gpu.MinMagFilter.linear,
+              widthAddressMode: gpu.SamplerAddressMode.repeat,
+              heightAddressMode: gpu.SamplerAddressMode.repeat,
+            ),
+          );
+          pass.bindTexture(
+            pipeline.fragmentShader.getUniformSlot('irradiance_map'),
+            assets.irradianceTexture,
+            sampler: environmentSampler,
+          );
+          pass.bindTexture(
+            pipeline.fragmentShader.getUniformSlot('radiance_map'),
+            assets.radianceTexture,
+            sampler: environmentSampler,
+          );
+          pass.draw();
+        }
       }
 
       // Opaque geometry first with depth writes, then translucent instances
@@ -446,7 +453,13 @@ class _GlintGameViewState extends State<GlintGameView>
   @override
   Widget build(BuildContext context) {
     final image = _image;
-    if (image == null) return widget.fallback ?? const SizedBox.expand();
+    if (image == null) {
+      // Still loading assets: hold the scene's background color rather than
+      // flashing the GPU-unavailable fallback.
+      return _failed
+          ? (widget.fallback ?? const SizedBox.expand())
+          : ColoredBox(color: widget.backgroundColor);
+    }
     return FutureBuilder<ui.Image>(
       future: image,
       builder: (context, snapshot) {
@@ -476,6 +489,26 @@ class _GameAssets {
   final double environmentStrength;
 }
 
+/// One material batch of a game model: an index span plus its GPU texture
+/// and factors.
+class _GameSubmesh {
+  const _GameSubmesh({
+    required this.indexOffset,
+    required this.indexCount,
+    required this.texture,
+    required this.baseColorFactor,
+    required this.metallicFactor,
+    required this.roughnessFactor,
+  });
+
+  final int indexOffset;
+  final int indexCount;
+  final gpu.Texture texture;
+  final List<double> baseColorFactor;
+  final double metallicFactor;
+  final double roughnessFactor;
+}
+
 /// A model resident on the GPU in its authored units — game transforms are
 /// authoritative, so no centering or normalization is applied.
 class _GameModel {
@@ -485,10 +518,8 @@ class _GameModel {
     required this.vertexByteLength,
     required this.vertexCount,
     required this.indexBuffer,
-    required this.indexByteLength,
-    required this.indexCount,
     required this.indexType,
-    required this.baseColorTexture,
+    required this.submeshes,
     required this.boundsMinimum,
     required this.boundsMaximum,
   });
@@ -498,37 +529,77 @@ class _GameModel {
   final int vertexByteLength;
   final int vertexCount;
   final gpu.DeviceBuffer indexBuffer;
-  final int indexByteLength;
-  final int indexCount;
   final gpu.IndexType indexType;
-  final gpu.Texture baseColorTexture;
+  final List<_GameSubmesh> submeshes;
   final Vector3 boundsMinimum;
   final Vector3 boundsMaximum;
 
+  int get indexByteSize => indexType == gpu.IndexType.int32 ? 4 : 2;
+
   static Future<_GameModel> load(Model source) async {
     final mesh = await source.load();
-    // Untextured game props shade from their material factors alone, so the
-    // sampler needs plain white — not the showcase grid.
-    final pixels = mesh.baseColorImageBytes == null
-        ? GlintTexturePixels(
-            width: 1,
-            height: 1,
-            bytes: ByteData(4)
-              ..setUint32(0, 0xffffffff),
-          )
-        : await GlintTexturePixels.decode(
-            mesh.baseColorImageBytes!,
-            debugLabel: 'embedded GLB base-color texture',
-          );
     final context = gpu.gpuContext;
-    final baseColorTexture = context.createTexture(
-      gpu.StorageMode.hostVisible,
-      pixels.width,
-      pixels.height,
-      coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
-      enableRenderTargetUsage: false,
+    gpu.Texture uploadPixels(GlintTexturePixels pixels) {
+      final texture = context.createTexture(
+        gpu.StorageMode.hostVisible,
+        pixels.width,
+        pixels.height,
+        coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
+        enableRenderTargetUsage: false,
+      );
+      texture.overwrite(pixels.bytes);
+      return texture;
+    }
+
+    // Untextured materials shade from their factors alone, so they share one
+    // white texel; textured materials decode capped at 1K so imported
+    // photo-real assets stay within mobile memory budgets.
+    final whiteTexture = uploadPixels(
+      GlintTexturePixels(
+        width: 1,
+        height: 1,
+        bytes: ByteData(4)..setUint32(0, 0xffffffff),
+      ),
     );
-    baseColorTexture.overwrite(pixels.bytes);
+    final materialTextures = <gpu.Texture>[
+      for (final material in mesh.materials)
+        material.baseColorImageBytes == null
+            ? whiteTexture
+            : uploadPixels(
+                await GlintTexturePixels.decode(
+                  material.baseColorImageBytes!,
+                  debugLabel: 'embedded GLB base-color texture',
+                  maximumDimension: 1024,
+                ),
+              ),
+    ];
+    final submeshes = mesh.submeshes.isEmpty
+        ? [
+            _GameSubmesh(
+              indexOffset: 0,
+              indexCount: mesh.indices.length,
+              texture: materialTextures.isEmpty
+                  ? whiteTexture
+                  : materialTextures.first,
+              baseColorFactor: mesh.baseColorFactor,
+              metallicFactor: mesh.metallicFactor,
+              roughnessFactor: mesh.roughnessFactor,
+            ),
+          ]
+        : [
+            for (final submesh in mesh.submeshes)
+              _GameSubmesh(
+                indexOffset: submesh.indexOffset,
+                indexCount: submesh.indexCount,
+                texture: materialTextures[submesh.materialIndex],
+                baseColorFactor:
+                    mesh.materials[submesh.materialIndex].baseColorFactor,
+                metallicFactor:
+                    mesh.materials[submesh.materialIndex].metallicFactor,
+                roughnessFactor:
+                    mesh.materials[submesh.materialIndex].roughnessFactor,
+              ),
+          ];
     final vertexData = Float32List(mesh.vertexCount * 8);
     for (var i = 0; i < mesh.vertexCount; i++) {
       final base = i * 8;
@@ -550,12 +621,10 @@ class _GameModel {
       vertexByteLength: vertexData.lengthInBytes,
       vertexCount: mesh.vertexCount,
       indexBuffer: context.createDeviceBufferWithCopy(indexData),
-      indexByteLength: indexData.lengthInBytes,
-      indexCount: mesh.indices.length,
       indexType: mesh.uses32BitIndices
           ? gpu.IndexType.int32
           : gpu.IndexType.int16,
-      baseColorTexture: baseColorTexture,
+      submeshes: submeshes,
       boundsMinimum: Vector3(
         mesh.boundsMinimum[0],
         mesh.boundsMinimum[1],

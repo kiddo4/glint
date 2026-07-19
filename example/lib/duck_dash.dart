@@ -39,9 +39,14 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
   static const _models = {
     'duck': Model.asset('packages/glint/assets/models/duck.glb'),
     'box': Model.asset('packages/glint/assets/models/box.glb'),
-    'coin': Model.asset('packages/glint/assets/models/coin.glb'),
-    'cone': Model.asset('packages/glint/assets/models/cone.glb'),
     'disc': Model.asset('packages/glint/assets/models/disc.glb'),
+    'barrier': Model.asset('packages/glint/assets/models/traffic_barrier.glb'),
+    'goldcoin': Model.asset(
+      'packages/glint/assets/models/cc0_gold_coin_blank.glb',
+    ),
+    'scenery': Model.asset(
+      'packages/glint/assets/models/low_poly_rocks_and_trees.glb',
+    ),
   };
 
   // The dawn palette: haze shared by fog and sky so the horizon is seamless.
@@ -61,21 +66,6 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
     metallic: 0,
     roughness: .8,
   );
-  static const _wood = Material3D(
-    color: Color(0xff7a5a3a),
-    metallic: 0,
-    roughness: .85,
-  );
-  static const _trunk = Material3D(
-    color: Color(0xff6b4a2f),
-    metallic: 0,
-    roughness: .95,
-  );
-  static const _pines = [
-    Material3D(color: Color(0xff2e5d3a), metallic: 0, roughness: .95),
-    Material3D(color: Color(0xff3a6b40), metallic: 0, roughness: .95),
-    Material3D(color: Color(0xff29513c), metallic: 0, roughness: .95),
-  ];
 
   Material3D _shadow(double strength) => Material3D(
     color: const Color(0xff000000),
@@ -137,57 +127,26 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
         );
       }
     }
-    // Fence posts hug the track edge and hammer home the speed.
-    final postScroll = _sim.distance % 6;
-    for (var i = 0; i < 16; i++) {
-      for (final side in const [-3.95, 3.95]) {
-        instances.add(
-          GlintGameInstance(
-            model: 'box',
-            material: _wood,
-            transform: Transform3D(
-              position: Vector3(side, .4, postScroll - 6.0 * i),
-              scale: const Vector3(.28, .8, .28),
-            ),
+    // Real imported scenery: the rocks-and-trees diorama repeats down both
+    // sides, mirrored per slot so the repetition doesn't read as a pattern.
+    final sceneryScroll = _sim.distance % 16;
+    final firstSlot = (_sim.distance / 16).floor();
+    for (var i = 0; i < 7; i++) {
+      final slot = firstSlot + i;
+      final hash = (slot * 2654435761) & 0x7fffffff;
+      final side = (slot.isEven ? -1 : 1).toDouble();
+      final mirror = hash & 1 == 0;
+      final z = sceneryScroll - 16.0 * i;
+      instances.add(
+        GlintGameInstance(
+          model: 'scenery',
+          transform: Transform3D(
+            position: Vector3(side * (14.5 + (hash >> 4 & 0xf) / 4), .2, z),
+            rotation: Vector3(0, mirror ? math.pi : 0, 0),
+            scale: const Vector3(.12, .12, .12),
           ),
-        );
-      }
-    }
-    // Stable pseudo-random pines: each 9-unit world slot hashes its own
-    // size, offset, and shade so the forest scrolls without flickering.
-    final treeScroll = _sim.distance % 9;
-    final firstSlot = (_sim.distance / 9).floor();
-    for (var i = 0; i < 12; i++) {
-      for (final side in const [-1, 1]) {
-        final slot = (firstSlot + i) * 2 + (side + 1) ~/ 2;
-        final hash = (slot * 2654435761) & 0x7fffffff;
-        final h1 = (hash & 0xff) / 255;
-        final h2 = ((hash >> 8) & 0xff) / 255;
-        final z = treeScroll - 9.0 * i - h2 * 4;
-        final x = side * (6.8 + h1 * 3.5);
-        final height = 2.4 + h2 * 1.6;
-        instances
-          ..add(
-            GlintGameInstance(
-              model: 'box',
-              material: _trunk,
-              transform: Transform3D(
-                position: Vector3(x, .4, z),
-                scale: const Vector3(.3, .8, .3),
-              ),
-            ),
-          )
-          ..add(
-            GlintGameInstance(
-              model: 'cone',
-              material: _pines[hash % _pines.length],
-              transform: Transform3D(
-                position: Vector3(x, .6, z),
-                scale: Vector3(1.1 + h1 * .7, height, 1.1 + h1 * .7),
-              ),
-            ),
-          );
-      }
+        ),
+      );
     }
 
     for (final entity in _sim.entities) {
@@ -207,18 +166,12 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
             )
             ..add(
               GlintGameInstance(
-                model: 'box',
+                // Real traffic barrier, authored at 9cm: scale 22x lands it
+                // at ~1.9 wide and ~1.1 tall, matching the jumpable hitbox.
+                model: 'barrier',
                 transform: Transform3D(
-                  position: Vector3(
-                    entity.x,
-                    DashRules.crateSize / 2,
-                    entity.z,
-                  ),
-                  scale: const Vector3(
-                    DashRules.crateSize,
-                    DashRules.crateSize,
-                    DashRules.crateSize,
-                  ),
+                  position: Vector3(entity.x, 0, entity.z),
+                  scale: const Vector3(22, 22, 22),
                 ),
               ),
             );
@@ -227,10 +180,13 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
           final bob = math.sin(_sim.runTime * 5 + entity.z * .7) * .1;
           instances.add(
             GlintGameInstance(
-              model: 'coin',
+              // Real minted coin, authored at 4cm: scale 24x gives a chunky
+              // collectible with its gold texture doing the shine.
+              model: 'goldcoin',
               transform: Transform3D(
                 position: Vector3(entity.x, .7 + bob, entity.z),
                 rotation: Vector3(0, _sim.runTime * 4 + entity.z * .2, 0),
+                scale: const Vector3(24, 24, 24),
               ),
             ),
           );

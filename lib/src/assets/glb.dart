@@ -8,6 +8,36 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import '../math.dart';
 
+/// One material an aggregated mesh draws with.
+class GlintGlbMaterial {
+  const GlintGlbMaterial({
+    this.baseColorImageBytes,
+    this.baseColorFactor = const [1, 1, 1, 1],
+    this.metallicFactor = 1,
+    this.roughnessFactor = 1,
+  });
+
+  final Uint8List? baseColorImageBytes;
+  final List<double> baseColorFactor;
+  final double metallicFactor;
+  final double roughnessFactor;
+}
+
+/// A contiguous index range of an aggregated mesh sharing one material.
+class GlintGlbSubmesh {
+  const GlintGlbSubmesh({
+    required this.indexOffset,
+    required this.indexCount,
+    required this.materialIndex,
+  });
+
+  final int indexOffset;
+  final int indexCount;
+
+  /// Index into [GlintGlbMesh.materials].
+  final int materialIndex;
+}
+
 /// Triangle geometry aggregated from the active scene of a binary glTF asset.
 class GlintGlbMesh {
   const GlintGlbMesh({
@@ -20,6 +50,8 @@ class GlintGlbMesh {
     this.baseColorFactor = const [1, 1, 1, 1],
     this.metallicFactor = 1,
     this.roughnessFactor = 1,
+    this.materials = const [GlintGlbMaterial()],
+    this.submeshes = const [],
     this.worldTransform = const [
       1,
       0,
@@ -51,6 +83,15 @@ class GlintGlbMesh {
   final List<double> baseColorFactor;
   final double metallicFactor;
   final double roughnessFactor;
+
+  /// Every material the scene's primitives reference; indices in [indices]
+  /// are grouped so each [GlintGlbSubmesh] is one contiguous span.
+  final List<GlintGlbMaterial> materials;
+
+  /// Per-material index ranges. Empty for meshes built before submesh
+  /// support; treat the whole index buffer as one span in that case.
+  final List<GlintGlbSubmesh> submeshes;
+
   final List<double> worldTransform;
   final List<double> boundsMinimum;
   final List<double> boundsMaximum;
@@ -221,7 +262,9 @@ class _GlbReader {
     final positions = <double>[];
     final uvs = <double>[];
     final normals = <double>[];
-    final indices = <int>[];
+    // Indices grouped by material (-1 for the glTF default material) so
+    // each material becomes one contiguous submesh span.
+    final indicesByMaterial = <int, List<int>>{};
     Map? firstPrimitive;
     var uses32BitIndices = false;
     for (final instance in _meshInstances()) {
@@ -279,13 +322,39 @@ class _GlbReader {
         positions.addAll(transformedPositions);
         uvs.addAll(primitiveUvs);
         normals.addAll(transformedNormals);
-        indices.addAll(primitiveIndices.map((index) => index + vertexOffset));
+        final documentMaterials = _optionalList(document['materials']);
+        var materialIndex = primitive['material'] as int? ?? -1;
+        if (materialIndex >= documentMaterials.length) materialIndex = -1;
+        (indicesByMaterial[materialIndex] ??= []).addAll(
+          primitiveIndices.map((index) => index + vertexOffset),
+        );
       }
     }
     if (firstPrimitive == null || positions.isEmpty) {
       throw const FormatException(
         'Active scene contains no supported TRIANGLES primitives.',
       );
+    }
+    final materials = [
+      for (final material in _optionalList(document['materials']))
+        _parseMaterial(material as Map),
+    ];
+    var defaultMaterialIndex = -1;
+    if (indicesByMaterial.containsKey(-1) || materials.isEmpty) {
+      materials.add(const GlintGlbMaterial());
+      defaultMaterialIndex = materials.length - 1;
+    }
+    final indices = <int>[];
+    final submeshes = <GlintGlbSubmesh>[];
+    for (final entry in indicesByMaterial.entries) {
+      submeshes.add(
+        GlintGlbSubmesh(
+          indexOffset: indices.length,
+          indexCount: entry.value.length,
+          materialIndex: entry.key == -1 ? defaultMaterialIndex : entry.key,
+        ),
+      );
+      indices.addAll(entry.value);
     }
     final bounds = _bounds(positions);
     return GlintGlbMesh(
@@ -294,6 +363,8 @@ class _GlbReader {
       normals: normals,
       indices: indices,
       uses32BitIndices: uses32BitIndices || positions.length ~/ 3 > 65535,
+      materials: materials,
+      submeshes: submeshes,
       baseColorImageBytes: _readBaseColorImage(firstPrimitive),
       baseColorFactor: _readBaseColorFactor(firstPrimitive),
       metallicFactor: _readMaterialNumber(firstPrimitive, 'metallicFactor', 1),
@@ -479,12 +550,28 @@ class _GlbReader {
     return normals;
   }
 
+  GlintGlbMaterial _parseMaterial(Map material) {
+    final pbr = material['pbrMetallicRoughness'] as Map?;
+    final factor = (pbr?['baseColorFactor'] as List?)
+        ?.map((value) => (value as num).toDouble())
+        .toList();
+    return GlintGlbMaterial(
+      baseColorImageBytes: _materialImage(material),
+      baseColorFactor: factor ?? const [1, 1, 1, 1],
+      metallicFactor: (pbr?['metallicFactor'] as num?)?.toDouble() ?? 1,
+      roughnessFactor: (pbr?['roughnessFactor'] as num?)?.toDouble() ?? 1,
+    );
+  }
+
   Uint8List? _readBaseColorImage(Map primitive) {
     final materialIndex = primitive['material'] as int?;
     if (materialIndex == null) return null;
     final materials = _optionalList(document['materials']);
     if (materialIndex >= materials.length) return null;
-    final material = materials[materialIndex] as Map;
+    return _materialImage(materials[materialIndex] as Map);
+  }
+
+  Uint8List? _materialImage(Map material) {
     final pbr = material['pbrMetallicRoughness'] as Map?;
     final textureInfo = pbr?['baseColorTexture'] as Map?;
     final textureIndex = textureInfo?['index'] as int?;
