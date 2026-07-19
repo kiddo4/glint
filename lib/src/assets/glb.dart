@@ -38,6 +38,231 @@ class GlintGlbSubmesh {
   final int materialIndex;
 }
 
+/// One node of a preserved glTF scene hierarchy.
+class GlintGlbNode {
+  const GlintGlbNode({
+    this.name,
+    this.children = const [],
+    this.meshIndex,
+    this.translation = const [0, 0, 0],
+    this.rotationQuaternion = const [0, 0, 0, 1],
+    this.scale = const [1, 1, 1],
+    this.matrix,
+  });
+
+  final String? name;
+  final List<int> children;
+  final int? meshIndex;
+  final List<double> translation;
+
+  /// x, y, z, w.
+  final List<double> rotationQuaternion;
+  final List<double> scale;
+
+  /// Authored column-major matrix; when present it replaces the TRS unless
+  /// an animation channel targets this node.
+  final List<double>? matrix;
+}
+
+/// What a [GlintGlbAnimationChannel] animates on its node.
+enum GlintGlbAnimationPath { translation, rotation, scale }
+
+/// Keyframes driving one property of one node.
+class GlintGlbAnimationChannel {
+  const GlintGlbAnimationChannel({
+    required this.nodeIndex,
+    required this.path,
+    required this.inputTimes,
+    required this.output,
+    this.stepInterpolation = false,
+  });
+
+  final int nodeIndex;
+  final GlintGlbAnimationPath path;
+
+  /// Ascending keyframe times in seconds.
+  final List<double> inputTimes;
+
+  /// Keyframe values, 3 components per key (4 for rotation, x y z w).
+  final List<double> output;
+
+  /// STEP holds each key; otherwise keys interpolate linearly
+  /// (rotations via shortest-path slerp).
+  final bool stepInterpolation;
+}
+
+/// One named animation clip.
+class GlintGlbAnimation {
+  const GlintGlbAnimation({
+    required this.name,
+    required this.channels,
+    required this.duration,
+  });
+
+  final String name;
+  final List<GlintGlbAnimationChannel> channels;
+
+  /// Seconds to the last keyframe across all channels.
+  final double duration;
+}
+
+/// A glTF scene with its hierarchy and animations preserved: meshes stay in
+/// their local spaces and node transforms are evaluated per frame, which is
+/// what animated rendering needs — unlike [GlintGlbMesh]'s baked aggregate.
+class GlintGlbRig {
+  const GlintGlbRig({
+    required this.nodes,
+    required this.rootNodes,
+    required this.meshes,
+    required this.animations,
+  });
+
+  final List<GlintGlbNode> nodes;
+  final List<int> rootNodes;
+
+  /// Local-space geometry, index-aligned with the glTF meshes array.
+  final List<GlintGlbMesh> meshes;
+  final List<GlintGlbAnimation> animations;
+
+  static Future<GlintGlbRig> fromAsset(
+    String assetKey, {
+    AssetBundle? bundle,
+  }) async {
+    try {
+      final bytes = await (bundle ?? rootBundle).load(assetKey);
+      return parse(bytes, debugLabel: assetKey);
+    } catch (error) {
+      if (error is GlintGlbException) rethrow;
+      throw GlintGlbException(assetKey, 'Asset could not be loaded', error);
+    }
+  }
+
+  static GlintGlbRig parse(ByteData bytes, {String debugLabel = 'model.glb'}) {
+    try {
+      return GlintGlbMesh._containerReader(bytes).readRig();
+    } catch (error) {
+      if (error is GlintGlbException) rethrow;
+      throw GlintGlbException(debugLabel, 'GLB rig parsing failed', error);
+    }
+  }
+
+  /// Column-major world transforms per node, sampling [animation] at [time]
+  /// (looped over the clip's duration). Pass animation -1 for the bind pose.
+  List<List<double>> nodeWorldTransforms({int animation = 0, double time = 0}) {
+    final translations = [for (final node in nodes) [...node.translation]];
+    final rotations = [
+      for (final node in nodes) [...node.rotationQuaternion],
+    ];
+    final scales = [for (final node in nodes) [...node.scale]];
+    final animated = List<bool>.filled(nodes.length, false);
+    if (animation >= 0 && animation < animations.length) {
+      final clip = animations[animation];
+      final localTime = clip.duration > 0 ? time % clip.duration : 0.0;
+      for (final channel in clip.channels) {
+        animated[channel.nodeIndex] = true;
+        final value = _sample(channel, localTime);
+        switch (channel.path) {
+          case GlintGlbAnimationPath.translation:
+            translations[channel.nodeIndex] = value;
+          case GlintGlbAnimationPath.rotation:
+            rotations[channel.nodeIndex] = value;
+          case GlintGlbAnimationPath.scale:
+            scales[channel.nodeIndex] = value;
+        }
+      }
+    }
+    final worlds = List<List<double>>.filled(nodes.length, const []);
+    void visit(int index, vm.Matrix4 parent) {
+      final node = nodes[index];
+      final vm.Matrix4 local;
+      if (node.matrix != null && !animated[index]) {
+        local = vm.Matrix4.fromList(node.matrix!);
+      } else {
+        final rotation = rotations[index];
+        local = vm.Matrix4.compose(
+          vm.Vector3(
+            translations[index][0],
+            translations[index][1],
+            translations[index][2],
+          ),
+          vm.Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]),
+          vm.Vector3(scales[index][0], scales[index][1], scales[index][2]),
+        );
+      }
+      final world = parent * local as vm.Matrix4;
+      worlds[index] = world.storage.toList();
+      for (final child in node.children) {
+        visit(child, world);
+      }
+    }
+
+    for (final root in rootNodes) {
+      visit(root, vm.Matrix4.identity());
+    }
+    for (var i = 0; i < worlds.length; i++) {
+      if (worlds[i].isEmpty) {
+        worlds[i] = vm.Matrix4.identity().storage.toList();
+      }
+    }
+    return worlds;
+  }
+
+  List<double> _sample(GlintGlbAnimationChannel channel, double time) {
+    final times = channel.inputTimes;
+    final stride = channel.path == GlintGlbAnimationPath.rotation ? 4 : 3;
+    List<double> key(int index) => [
+      for (var c = 0; c < stride; c++) channel.output[index * stride + c],
+    ];
+    if (times.isEmpty) return List.filled(stride, 0);
+    if (time <= times.first) return key(0);
+    if (time >= times.last) return key(times.length - 1);
+    var next = 1;
+    while (times[next] < time) {
+      next++;
+    }
+    final previous = next - 1;
+    if (channel.stepInterpolation) return key(previous);
+    final span = times[next] - times[previous];
+    final t = span <= 0 ? 0.0 : (time - times[previous]) / span;
+    final a = key(previous);
+    final b = key(next);
+    if (channel.path != GlintGlbAnimationPath.rotation) {
+      return [for (var c = 0; c < stride; c++) a[c] + (b[c] - a[c]) * t];
+    }
+    return _slerp(a, b, t);
+  }
+
+  /// Shortest-path spherical interpolation with a linear fallback when the
+  /// quaternions are nearly parallel.
+  List<double> _slerp(List<double> a, List<double> b, double t) {
+    var dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    var bx = b[0], by = b[1], bz = b[2], bw = b[3];
+    if (dot < 0) {
+      dot = -dot;
+      bx = -bx;
+      by = -by;
+      bz = -bz;
+      bw = -bw;
+    }
+    double weightA, weightB;
+    if (dot > .9995) {
+      weightA = 1 - t;
+      weightB = t;
+    } else {
+      final theta = math.acos(dot.clamp(-1, 1));
+      final sine = math.sin(theta);
+      weightA = math.sin((1 - t) * theta) / sine;
+      weightB = math.sin(t * theta) / sine;
+    }
+    final x = a[0] * weightA + bx * weightB;
+    final y = a[1] * weightA + by * weightB;
+    final z = a[2] * weightA + bz * weightB;
+    final w = a[3] * weightA + bw * weightB;
+    final length = math.sqrt(x * x + y * y + z * z + w * w);
+    return length == 0 ? const [0, 0, 0, 1] : [x / length, y / length, z / length, w / length];
+  }
+}
+
 /// Triangle geometry aggregated from the active scene of a binary glTF asset.
 class GlintGlbMesh {
   const GlintGlbMesh({
@@ -192,6 +417,17 @@ class GlintGlbMesh {
   /// Parses and aggregates supported triangle primitives in the active scene.
   static GlintGlbMesh parse(ByteData bytes, {String debugLabel = 'model.glb'}) {
     try {
+      return _containerReader(bytes).readFirstMesh();
+    } catch (error) {
+      if (error is GlintGlbException) rethrow;
+      throw GlintGlbException(debugLabel, 'GLB parsing failed', error);
+    }
+  }
+
+  /// Splits a GLB container into its JSON document and binary chunk.
+  /// Library-internal: rig parsing shares it.
+  static _GlbReader _containerReader(ByteData bytes) {
+    {
       final data = ByteData.view(
         bytes.buffer,
         bytes.offsetInBytes,
@@ -244,10 +480,7 @@ class GlintGlbMesh {
       if (document == null || binary == null) {
         throw const FormatException('GLB requires JSON and BIN chunks.');
       }
-      return _GlbReader(document, binary).readFirstMesh();
-    } catch (error) {
-      if (error is GlintGlbException) rethrow;
-      throw GlintGlbException(debugLabel, 'GLB parsing failed', error);
+      return _GlbReader(document, binary);
     }
   }
 }
@@ -257,7 +490,109 @@ class _GlbReader {
   final Map<String, dynamic> document;
   final ByteData binary;
 
-  GlintGlbMesh readFirstMesh() {
+  GlintGlbMesh readFirstMesh() => _aggregate(_meshInstances());
+
+  /// Reads the scene with hierarchy and animations preserved: every glTF
+  /// mesh parsed once in local space plus nodes and animation clips.
+  GlintGlbRig readRig() {
+    final meshCount = _list(document['meshes'], 'meshes').length;
+    final documentNodes = _optionalList(document['nodes']);
+    final nodes = <GlintGlbNode>[];
+    for (final value in documentNodes) {
+      final node = value as Map;
+      final rotation = (node['rotation'] as List?) ?? const [0, 0, 0, 1];
+      final translation = (node['translation'] as List?) ?? const [0, 0, 0];
+      final scale = (node['scale'] as List?) ?? const [1, 1, 1];
+      nodes.add(
+        GlintGlbNode(
+          name: node['name'] as String?,
+          children: ((node['children'] as List?) ?? const []).cast<int>(),
+          meshIndex: node['mesh'] as int?,
+          translation: [for (final v in translation) (v as num).toDouble()],
+          rotationQuaternion: [
+            for (final v in rotation) (v as num).toDouble(),
+          ],
+          scale: [for (final v in scale) (v as num).toDouble()],
+          matrix: (node['matrix'] as List?)
+              ?.map((v) => (v as num).toDouble())
+              .toList(),
+        ),
+      );
+    }
+    final scenes = _optionalList(document['scenes']);
+    final activeScene = (document['scene'] as int?) ?? 0;
+    final rootNodes = scenes.isEmpty
+        ? [for (var i = 0; i < nodes.length; i++) i]
+        : ((scenes[activeScene] as Map)['nodes'] as List? ?? const [])
+              .cast<int>();
+    final animations = <GlintGlbAnimation>[];
+    var clipIndex = 0;
+    for (final value in _optionalList(document['animations'])) {
+      final animation = value as Map;
+      final samplers = _list(animation['samplers'], 'animation samplers');
+      final channels = <GlintGlbAnimationChannel>[];
+      var duration = 0.0;
+      for (final channelValue in _list(
+        animation['channels'],
+        'animation channels',
+      )) {
+        final channel = channelValue as Map;
+        final target = channel['target'] as Map;
+        final nodeIndex = target['node'] as int?;
+        final path = switch (target['path'] as String?) {
+          'translation' => GlintGlbAnimationPath.translation,
+          'rotation' => GlintGlbAnimationPath.rotation,
+          'scale' => GlintGlbAnimationPath.scale,
+          _ => null, // weights (morph targets) are outside v0.1.
+        };
+        if (nodeIndex == null || path == null) continue;
+        final sampler = samplers[channel['sampler'] as int] as Map;
+        final interpolation =
+            sampler['interpolation'] as String? ?? 'LINEAR';
+        if (interpolation == 'CUBICSPLINE') {
+          throw const FormatException(
+            'CUBICSPLINE animation interpolation is not supported yet.',
+          );
+        }
+        final inputTimes = _readFloats(sampler['input'] as int, 'SCALAR');
+        final output = _readFloats(
+          sampler['output'] as int,
+          path == GlintGlbAnimationPath.rotation ? 'VEC4' : 'VEC3',
+        );
+        if (inputTimes.isNotEmpty && inputTimes.last > duration) {
+          duration = inputTimes.last;
+        }
+        channels.add(
+          GlintGlbAnimationChannel(
+            nodeIndex: nodeIndex,
+            path: path,
+            inputTimes: inputTimes,
+            output: output,
+            stepInterpolation: interpolation == 'STEP',
+          ),
+        );
+      }
+      animations.add(
+        GlintGlbAnimation(
+          name: (animation['name'] as String?) ?? 'animation $clipIndex',
+          channels: channels,
+          duration: duration,
+        ),
+      );
+      clipIndex++;
+    }
+    return GlintGlbRig(
+      nodes: nodes,
+      rootNodes: rootNodes,
+      meshes: [
+        for (var i = 0; i < meshCount; i++)
+          _aggregate([(i, vm.Matrix4.identity())]),
+      ],
+      animations: animations,
+    );
+  }
+
+  GlintGlbMesh _aggregate(List<(int, vm.Matrix4)> meshInstances) {
     final meshes = _list(document['meshes'], 'meshes');
     final positions = <double>[];
     final uvs = <double>[];
@@ -267,7 +602,7 @@ class _GlbReader {
     final indicesByMaterial = <int, List<int>>{};
     Map? firstPrimitive;
     var uses32BitIndices = false;
-    for (final instance in _meshInstances()) {
+    for (final instance in meshInstances) {
       final meshIndex = instance.$1;
       if (meshIndex < 0 || meshIndex >= meshes.length) {
         throw const FormatException('Mesh index is out of range.');
@@ -612,7 +947,13 @@ class _GlbReader {
         '$expectedType accessor must contain FLOAT values.',
       );
     }
-    final components = expectedType == 'VEC3' ? 3 : 2;
+    final components = switch (expectedType) {
+      'SCALAR' => 1,
+      'VEC2' => 2,
+      'VEC3' => 3,
+      'VEC4' => 4,
+      _ => throw FormatException('Unsupported accessor type $expectedType.'),
+    };
     final view = _view(accessor['bufferView'] as int);
     final count = accessor['count'] as int;
     final start =

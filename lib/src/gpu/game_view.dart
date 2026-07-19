@@ -14,6 +14,7 @@ import '../assets/model.dart';
 import '../assets/texture_pixels.dart';
 import '../math.dart';
 import '../scene.dart';
+import 'render_stats.dart';
 
 /// A free camera for game rendering: position and target in world units.
 class GlintGameCamera {
@@ -81,6 +82,7 @@ class GlintGameView extends StatefulWidget {
     this.lightIntensity = 2.6,
     this.ambientIntensity = .26,
     this.backgroundColor = const ui.Color(0xff090b13),
+    this.showStats = false,
     this.fogColor,
     this.fogDistance = 0,
     this.fallback,
@@ -100,6 +102,9 @@ class GlintGameView extends StatefulWidget {
   final double lightIntensity;
   final double ambientIntensity;
   final ui.Color backgroundColor;
+
+  /// Overlays live FPS, frame time, draw-call, and triangle counters.
+  final bool showStats;
 
   /// Horizon color surfaces fade into with distance; defaults to
   /// [backgroundColor]. Pair it with the sky for a seamless horizon.
@@ -124,6 +129,16 @@ class _GlintGameViewState extends State<GlintGameView>
   gpu.RenderPipeline? _pipeline;
   bool _rendering = false;
   bool _failed = false;
+
+  final _stats = ValueNotifier<GlintRenderStats?>(null);
+  final _frameTimestamps = <int>[];
+
+  // Per-draw scratch state, reused every frame so the render loop allocates
+  // nothing per instance.
+  final _uniformScratch = Float32List(52);
+  final _worldScratch = vm.Matrix4.zero();
+  final _mvpScratch = vm.Matrix4.zero();
+  final _cornerScratch = vm.Vector3.zero();
 
   @override
   void initState() {
@@ -153,6 +168,7 @@ class _GlintGameViewState extends State<GlintGameView>
   @override
   void dispose() {
     _ticker?.dispose();
+    _stats.dispose();
     super.dispose();
   }
 
@@ -241,6 +257,7 @@ class _GlintGameViewState extends State<GlintGameView>
 
   Future<ui.Image> _render(GlintGameFrame frame) async {
     try {
+      final stopwatch = Stopwatch()..start();
       final assets = await _assets;
       final context = gpu.gpuContext;
       final pipeline = _obtainPipeline(context);
@@ -308,18 +325,40 @@ class _GlintGameViewState extends State<GlintGameView>
               math.pow(fog.b, 2.2).toDouble(),
               widget.fogDistance,
             ];
+      // One world-space frustum for the whole frame; instances test their
+      // transformed bounds against it without per-draw plane extraction.
+      final frustum = GlintFrustum.fromColumnMajor(viewProjection.storage);
+      // The static tail of the uniform block never changes within a frame.
+      for (var i = 0; i < 4; i++) {
+        _uniformScratch[44 + i] = fogUniform[i];
+      }
+      _uniformScratch[36] = widget.lightDirection.x;
+      _uniformScratch[37] = widget.lightDirection.y;
+      _uniformScratch[38] = widget.lightDirection.z;
+      _uniformScratch[39] = assets.environmentStrength;
+      _uniformScratch[40] = widget.ambientIntensity;
+      _uniformScratch[41] = widget.lightIntensity;
+      _uniformScratch[48] = camera.position.x;
+      _uniformScratch[49] = camera.position.y;
+      _uniformScratch[50] = camera.position.z;
+      _uniformScratch[51] = 0;
+
+      var drawCalls = 0;
+      var triangles = 0;
       final hostBuffer = context.createHostBuffer();
       void draw(GlintGameInstance instance) {
         final model = assets.models[instance.model];
         if (model == null) {
           throw StateError('Unknown game model "${instance.model}".');
         }
-        final world = _composeTransform(instance.transform);
-        final mvp = viewProjection * world as vm.Matrix4;
-        final visible = GlintFrustum.fromColumnMajor(
-          mvp.storage,
-        ).intersectsBounds(model.boundsMinimum, model.boundsMaximum);
-        if (!visible) return;
+        final world = _composeTransform(instance.transform, _worldScratch);
+        if (!_worldBoundsVisible(frustum, world, model)) return;
+        _mvpScratch.setFrom(viewProjection);
+        _mvpScratch.multiply(world);
+        for (var i = 0; i < 16; i++) {
+          _uniformScratch[i] = _mvpScratch.storage[i];
+          _uniformScratch[16 + i] = world.storage[i];
+        }
         pass.bindVertexBuffer(
           gpu.BufferView(
             model.vertexBuffer,
@@ -329,9 +368,17 @@ class _GlintGameViewState extends State<GlintGameView>
           model.vertexCount,
         );
         final material = instance.material;
+        final overrideFactor = material?.linearBaseColorFactor;
         // One draw per material batch; an instance material override wins
         // over every submesh's authored factors.
         for (final submesh in model.submeshes) {
+          final factor = overrideFactor ?? submesh.baseColorFactor;
+          for (var i = 0; i < 4; i++) {
+            _uniformScratch[32 + i] = factor[i];
+          }
+          _uniformScratch[42] = material?.metallic ?? submesh.metallicFactor;
+          _uniformScratch[43] =
+              material?.roughness ?? submesh.roughnessFactor;
           pass.bindIndexBuffer(
             gpu.BufferView(
               model.indexBuffer,
@@ -343,28 +390,10 @@ class _GlintGameViewState extends State<GlintGameView>
           );
           pass.bindUniform(
             pipeline.vertexShader.getUniformSlot('VertInfo'),
-            hostBuffer.emplace(
-              _floats([
-                ...mvp.storage,
-                ...world.storage,
-                ...material?.linearBaseColorFactor ??
-                    submesh.baseColorFactor,
-                widget.lightDirection.x,
-                widget.lightDirection.y,
-                widget.lightDirection.z,
-                assets.environmentStrength,
-                widget.ambientIntensity,
-                widget.lightIntensity,
-                material?.metallic ?? submesh.metallicFactor,
-                material?.roughness ?? submesh.roughnessFactor,
-                camera.position.x,
-                camera.position.y,
-                camera.position.z,
-                0,
-                ...fogUniform,
-              ]),
-            ),
+            hostBuffer.emplace(_uniformScratch.buffer.asByteData()),
           );
+          drawCalls++;
+          triangles += submesh.indexCount ~/ 3;
           pass.bindTexture(
             pipeline.fragmentShader.getUniformSlot('tex'),
             submesh.texture,
@@ -417,6 +446,11 @@ class _GlintGameViewState extends State<GlintGameView>
         },
       );
       await completer.future;
+      _recordStats(
+        stopwatch.elapsedMicroseconds / 1000,
+        drawCalls,
+        triangles,
+      );
       return texture.asImage();
     } catch (error) {
       debugPrint('Glint game render failed: $error');
@@ -426,9 +460,10 @@ class _GlintGameViewState extends State<GlintGameView>
   }
 
   /// World matrix matching [Transform3D.apply]: scale, then X/Y/Z rotation,
-  /// then translation.
-  vm.Matrix4 _composeTransform(Transform3D transform) {
-    final matrix = vm.Matrix4.identity()
+  /// then translation. Composes into [target] to avoid per-draw allocation.
+  vm.Matrix4 _composeTransform(Transform3D transform, vm.Matrix4 target) {
+    target
+      ..setIdentity()
       ..translateByDouble(
         transform.position.x,
         transform.position.y,
@@ -444,33 +479,114 @@ class _GlintGameViewState extends State<GlintGameView>
         transform.scale.z,
         1,
       );
-    return matrix;
+    return target;
   }
 
-  ByteData _floats(List<double> values) =>
-      Float32List.fromList(values).buffer.asByteData();
+  /// Transforms the model's local bounds corners to world space and tests
+  /// the world-aligned box against the frame's frustum.
+  bool _worldBoundsVisible(
+    GlintFrustum frustum,
+    vm.Matrix4 world,
+    _GameModel model,
+  ) {
+    var minX = double.infinity, minY = double.infinity, minZ = double.infinity;
+    var maxX = double.negativeInfinity,
+        maxY = double.negativeInfinity,
+        maxZ = double.negativeInfinity;
+    for (var corner = 0; corner < 8; corner++) {
+      _cornerScratch.setValues(
+        corner & 1 == 0 ? model.boundsMinimum.x : model.boundsMaximum.x,
+        corner & 2 == 0 ? model.boundsMinimum.y : model.boundsMaximum.y,
+        corner & 4 == 0 ? model.boundsMinimum.z : model.boundsMaximum.z,
+      );
+      world.transform3(_cornerScratch);
+      minX = math.min(minX, _cornerScratch.x);
+      minY = math.min(minY, _cornerScratch.y);
+      minZ = math.min(minZ, _cornerScratch.z);
+      maxX = math.max(maxX, _cornerScratch.x);
+      maxY = math.max(maxY, _cornerScratch.y);
+      maxZ = math.max(maxZ, _cornerScratch.z);
+    }
+    return frustum.intersectsBounds(
+      Vector3(minX, minY, minZ),
+      Vector3(maxX, maxY, maxZ),
+    );
+  }
+
+  void _recordStats(double frameMilliseconds, int drawCalls, int triangles) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _frameTimestamps
+      ..add(now)
+      ..removeWhere((timestamp) => now - timestamp > 1000);
+    _stats.value = GlintRenderStats(
+      framesPerSecond: _frameTimestamps.length,
+      frameTimeMilliseconds: frameMilliseconds,
+      drawCalls: drawCalls,
+      triangleCount: triangles,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final image = _image;
+    Widget viewport;
     if (image == null) {
       // Still loading assets: hold the scene's background color rather than
       // flashing the GPU-unavailable fallback.
-      return _failed
+      viewport = _failed
           ? (widget.fallback ?? const SizedBox.expand())
           : ColoredBox(color: widget.backgroundColor);
+    } else {
+      viewport = FutureBuilder<ui.Image>(
+        future: image,
+        builder: (context, snapshot) {
+          if (snapshot.hasData) {
+            return RawImage(image: snapshot.data, fit: BoxFit.cover);
+          }
+          if (snapshot.hasError) {
+            return widget.fallback ?? const SizedBox.expand();
+          }
+          return const SizedBox.expand();
+        },
+      );
     }
-    return FutureBuilder<ui.Image>(
-      future: image,
-      builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          return RawImage(image: snapshot.data, fit: BoxFit.cover);
-        }
-        if (snapshot.hasError) {
-          return widget.fallback ?? const SizedBox.expand();
-        }
-        return const SizedBox.expand();
-      },
+    if (!widget.showStats) return viewport;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        viewport,
+        Positioned(
+          top: 12,
+          right: 12,
+          child: IgnorePointer(
+            child: ValueListenableBuilder<GlintRenderStats?>(
+              valueListenable: _stats,
+              builder: (_, stats, _) => stats == null
+                  ? const SizedBox.shrink()
+                  : DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xcc10131c),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        child: Text(
+                          '$stats',
+                          style: const TextStyle(
+                            color: Color(0xffc9d1e0),
+                            fontSize: 12,
+                            fontFeatures: [ui.FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
