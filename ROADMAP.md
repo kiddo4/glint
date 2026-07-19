@@ -59,10 +59,13 @@ Deliverable: the public launch demo and video.
 
 ## Milestone 4 — v0.1 release (3–4 weeks)
 
-- Three runnable examples: viewer, configurator, anchored labels
-- API reference, copy-paste guides, compatibility table, and troubleshooting
-- Device performance validation on macOS, iOS, and mid-range Android
-- Package hygiene and pub.dev release readiness
+- [x] Runnable examples: viewer, configurator, anchored labels, Duck Dash
+- [x] README with quick start, copy-paste guides, compatibility table, and
+      troubleshooting; dartdoc comments across the public API
+- [x] Device performance validation on macOS and iPhone (60 fps);
+      mid-range Android still pending
+- [x] Package hygiene: version 0.1.0, changelog, license, attribution
+- Publish to pub.dev (account action)
 
 ## Flagship game — Duck Dash (endless runner)
 
@@ -70,12 +73,13 @@ A Subway-Surfers-style lane runner starring the Glint duck, built to prove
 the engine drives real games: many moving objects, a chase camera, and a
 Flutter-widget HUD over a smooth 3D world.
 
-- GlintGameView: multi-instance rendering with per-node transforms
-- Free look-at chase camera independent of orbit gestures
-- Ticker-driven game loop with delta-time updates
-- Procedural crate and coin assets
-- Three-lane runner: swipe steering, obstacles, coins, ramping speed
-- Score/lives HUD, game-over and restart flow, mobile validation
+- [x] GlintGameView: multi-instance rendering with per-node transforms
+- [x] Free look-at chase camera independent of orbit gestures
+- [x] Ticker-driven game loop with delta-time updates
+- [x] Procedural and imported multi-material props, fog, blob shadows
+- [x] Three-lane runner: swipe steering, obstacles, coins, ramping speed
+- [x] Score HUD, game-over and restart flow, iPhone 60 fps validation
+- [x] glTF node-animation playback with an allocation-free draw loop
 
 ## Explicitly outside v0.1
 

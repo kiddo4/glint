@@ -311,6 +311,18 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
                 child: _Hud(sim: _sim),
               ),
             ),
+            if (Navigator.of(context).canPop())
+              Positioned(
+                top: 0,
+                right: 0,
+                child: SafeArea(
+                  child: IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: 'Leave the game',
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
