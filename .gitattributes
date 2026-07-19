@@ -1,1 +1,1 @@
-assets/models/low_poly_rocks_and_trees.glb filter=lfs diff=lfs merge=lfs -text
+example/assets/models/low_poly_rocks_and_trees.glb filter=lfs diff=lfs merge=lfs -text

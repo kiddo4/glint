@@ -1,0 +1,8 @@
+# Heavy demo-only assets ship with the example app in the repository, not
+# in the published package (pub.dev enforces a size ceiling).
+example/assets/models/low_poly_rocks_and_trees.glb
+example/assets/models/cc0_gold_coin_blank.glb
+example/build/
+.pnpm-store/
+website/
+tool/

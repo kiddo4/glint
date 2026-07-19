@@ -41,12 +41,9 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
     'box': Model.asset('packages/glint/assets/models/box.glb'),
     'disc': Model.asset('packages/glint/assets/models/disc.glb'),
     'barrier': Model.asset('packages/glint/assets/models/traffic_barrier.glb'),
-    'goldcoin': Model.asset(
-      'packages/glint/assets/models/cc0_gold_coin_blank.glb',
-    ),
-    'scenery': Model.asset(
-      'packages/glint/assets/models/low_poly_rocks_and_trees.glb',
-    ),
+    // Heavy demo models ship with the example app, not the glint package.
+    'goldcoin': Model.asset('assets/models/cc0_gold_coin_blank.glb'),
+    'scenery': Model.asset('assets/models/low_poly_rocks_and_trees.glb'),
     'cargo': Model.asset('packages/glint/assets/models/box_animated.glb'),
   };
 

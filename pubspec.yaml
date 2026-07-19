@@ -1,11 +1,20 @@
 name: glint
-description: A Flutter-native declarative 3D experience engine.
+description: >-
+  A pure-Dart 3D engine on Flutter GPU: glTF models, PBR + HDRI lighting,
+  animation, tap picking, anchored widgets, and a real-time game loop.
 version: 0.1.0
-homepage: https://github.com/glint-engine/glint
+homepage: https://glint.kiddobuild.dev
+repository: https://github.com/kiddo4/glint
+topics:
+  - 3d
+  - gltf
+  - game-engine
+  - rendering
+  - graphics
 
 environment:
   sdk: ^3.12.1
-  flutter: ">=3.44.1 <3.45.0"
+  flutter: ">=3.44.1"
 
 dependencies:
   flutter:
@@ -35,8 +44,6 @@ flutter:
     - assets/models/disc.glb
     - assets/models/traffic_barrier.glb
     - assets/models/box_animated.glb
-    - assets/models/cc0_gold_coin_blank.glb
-    - assets/models/low_poly_rocks_and_trees.glb
     - assets/environments/studio.hdr
     - assets/environments/dawn.hdr
 
