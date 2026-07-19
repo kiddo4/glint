@@ -21,7 +21,75 @@ void main() {
     metallic: 1,
     roughness: .25,
   );
-  stdout.writeln('Wrote assets/models/box.glb and assets/models/coin.glb');
+  _writeGlb(
+    'assets/models/cone.glb',
+    _cone(radius: .5, height: 1, segments: 10),
+    baseColor: [.19, .38, .22, 1],
+    metallic: 0,
+    roughness: .9,
+  );
+  _writeGlb(
+    'assets/models/disc.glb',
+    _disc(radius: .5, segments: 18),
+    baseColor: [0, 0, 0, .38],
+    metallic: 0,
+    roughness: 1,
+  );
+  stdout.writeln('Wrote box.glb, coin.glb, cone.glb, and disc.glb');
+}
+
+/// An upright cone: base circle on y=0, apex at [height]. Used for trees.
+_Geometry _cone({
+  required double radius,
+  required double height,
+  required int segments,
+}) {
+  final g = _Geometry();
+  for (var i = 0; i < segments; i++) {
+    final a0 = i * 2 * math.pi / segments;
+    final a1 = (i + 1) * 2 * math.pi / segments;
+    final x0 = math.cos(a0) * radius, z0 = math.sin(a0) * radius;
+    final x1 = math.cos(a1) * radius, z1 = math.sin(a1) * radius;
+    final mid = (a0 + a1) / 2;
+    // Slanted side triangle; CCW seen from outside (+z faces the viewer at
+    // mid-angle 90°, where x decreases with angle).
+    final side = g.positions.length ~/ 3;
+    g.positions.addAll([0, height, 0, x1, 0, z1, x0, 0, z0]);
+    final slant = radius / height;
+    for (var v = 0; v < 3; v++) {
+      g.normals.addAll([math.cos(mid), slant, math.sin(mid)]);
+      g.uvs.addAll([0, 0]);
+    }
+    g.indices.addAll([side, side + 1, side + 2]);
+    // Base triangle facing down.
+    final base = g.positions.length ~/ 3;
+    g.positions.addAll([0, 0, 0, x0, 0, z0, x1, 0, z1]);
+    g.normals.addAll([0, -1, 0, 0, -1, 0, 0, -1, 0]);
+    g.uvs.addAll([0, 0, 0, 0, 0, 0]);
+    g.indices.addAll([base, base + 1, base + 2]);
+  }
+  return g;
+}
+
+/// A flat circle on the ground plane facing +y. Used for blob shadows.
+_Geometry _disc({required double radius, required int segments}) {
+  final g = _Geometry();
+  for (var i = 0; i < segments; i++) {
+    final a0 = i * 2 * math.pi / segments;
+    final a1 = (i + 1) * 2 * math.pi / segments;
+    final start = g.positions.length ~/ 3;
+    // CCW seen from above (+y): angle sweep runs x→z clockwise in screen
+    // terms, so wind center, a1, a0.
+    g.positions.addAll([
+      0, 0, 0,
+      math.cos(a1) * radius, 0, math.sin(a1) * radius,
+      math.cos(a0) * radius, 0, math.sin(a0) * radius,
+    ]);
+    g.normals.addAll([0, 1, 0, 0, 1, 0, 0, 1, 0]);
+    g.uvs.addAll([0, 0, 0, 0, 0, 0]);
+    g.indices.addAll([start, start + 1, start + 2]);
+  }
+  return g;
 }
 
 class _Geometry {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -39,6 +40,7 @@ class GlintGameInstance {
     required this.model,
     this.transform = const Transform3D(),
     this.material,
+    this.translucent = false,
   });
 
   /// Key into [GlintGameView.models].
@@ -49,6 +51,10 @@ class GlintGameInstance {
 
   /// Overrides the model's authored material for this instance only.
   final Material3D? material;
+
+  /// Alpha-blends over opaque geometry without writing depth; drawn last.
+  /// Use for blob shadows and other soft decals.
+  final bool translucent;
 }
 
 /// Everything the renderer needs to draw one game frame.
@@ -75,6 +81,8 @@ class GlintGameView extends StatefulWidget {
     this.lightIntensity = 2.6,
     this.ambientIntensity = .26,
     this.backgroundColor = const ui.Color(0xff090b13),
+    this.fogColor,
+    this.fogDistance = 0,
     this.fallback,
     this.onError,
   });
@@ -92,6 +100,14 @@ class GlintGameView extends StatefulWidget {
   final double lightIntensity;
   final double ambientIntensity;
   final ui.Color backgroundColor;
+
+  /// Horizon color surfaces fade into with distance; defaults to
+  /// [backgroundColor]. Pair it with the sky for a seamless horizon.
+  final ui.Color? fogColor;
+
+  /// World-space distance at which surfaces fully fog out; 0 disables fog.
+  final double fogDistance;
+
   final Widget? fallback;
   final ValueChanged<Object>? onError;
 
@@ -280,8 +296,17 @@ class _GlintGameViewState extends State<GlintGameView>
         widthAddressMode: gpu.SamplerAddressMode.repeat,
         heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
       );
+      final fog = widget.fogColor ?? widget.backgroundColor;
+      final fogUniform = widget.fogDistance <= 0
+          ? const [0.0, 0.0, 0.0, 0.0]
+          : [
+              math.pow(fog.r, 2.2).toDouble(),
+              math.pow(fog.g, 2.2).toDouble(),
+              math.pow(fog.b, 2.2).toDouble(),
+              widget.fogDistance,
+            ];
       final hostBuffer = context.createHostBuffer();
-      for (final instance in frame.instances) {
+      void draw(GlintGameInstance instance) {
         final model = assets.models[instance.model];
         if (model == null) {
           throw StateError('Unknown game model "${instance.model}".');
@@ -291,7 +316,7 @@ class _GlintGameViewState extends State<GlintGameView>
         final visible = GlintFrustum.fromColumnMajor(
           mvp.storage,
         ).intersectsBounds(model.boundsMinimum, model.boundsMaximum);
-        if (!visible) continue;
+        if (!visible) return;
         pass.bindVertexBuffer(
           gpu.BufferView(
             model.vertexBuffer,
@@ -330,6 +355,7 @@ class _GlintGameViewState extends State<GlintGameView>
               camera.position.y,
               camera.position.z,
               0,
+              ...fogUniform,
             ]),
           ),
         );
@@ -354,6 +380,25 @@ class _GlintGameViewState extends State<GlintGameView>
           sampler: environmentSampler,
         );
         pass.draw();
+      }
+
+      // Opaque geometry first with depth writes, then translucent instances
+      // (blob shadows, glass) blended over it without disturbing the depth
+      // buffer.
+      for (final instance in frame.instances) {
+        if (!instance.translucent) draw(instance);
+      }
+      if (frame.instances.any((instance) => instance.translucent)) {
+        pass.setDepthWriteEnable(false);
+        pass.setColorBlendEnable(true);
+        pass.setColorBlendEquation(
+          gpu.ColorBlendEquation(
+            sourceColorBlendFactor: gpu.BlendFactor.sourceAlpha,
+          ),
+        );
+        for (final instance in frame.instances) {
+          if (instance.translucent) draw(instance);
+        }
       }
 
       final completer = Completer<void>();

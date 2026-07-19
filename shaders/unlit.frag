@@ -10,6 +10,7 @@ in vec3 v_light_direction;
 in float v_environment;
 in vec3 v_world_position;
 in vec3 v_camera_position;
+in vec4 v_fog;
 out vec4 frag_color;
 
 const float PI = 3.14159265359;
@@ -111,7 +112,15 @@ void main() {
     float sky = 0.5 + 0.5 * n.y;
     ambient = albedo.rgb * v_lighting.x * mix(0.3, 1.0, sky);
   }
-  vec3 color = clamp(ambient + direct, 0.0, 1.0);
-  color = pow(color, vec3(1.0 / 2.2));
+  vec3 color = ambient + direct;
+  // Linear distance fog toward the horizon color; starts at 45% of the end
+  // distance so the play area stays crisp while depth melts away.
+  if (v_fog.w > 0.0) {
+    float distance_to_camera = length(v_world_position - v_camera_position);
+    float fog_factor = clamp(
+        (distance_to_camera - v_fog.w * 0.45) / (v_fog.w * 0.55), 0.0, 1.0);
+    color = mix(color, v_fog.rgb, fog_factor);
+  }
+  color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
   frag_color = vec4(color, albedo.a);
 }

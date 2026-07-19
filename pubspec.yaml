@@ -31,7 +31,10 @@ flutter:
     - assets/models/duck.glb
     - assets/models/box.glb
     - assets/models/coin.glb
+    - assets/models/cone.glb
+    - assets/models/disc.glb
     - assets/environments/studio.hdr
+    - assets/environments/dawn.hdr
 
   # To add assets to your package, add an assets section, like this:
   # assets:

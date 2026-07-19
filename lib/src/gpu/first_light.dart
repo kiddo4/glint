@@ -508,6 +508,11 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             0,
             _distance,
             0,
+            // Fog stays off in the product viewer.
+            0,
+            0,
+            0,
+            0,
           ]),
         ),
       );

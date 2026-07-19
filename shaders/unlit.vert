@@ -5,6 +5,8 @@ uniform VertInfo {
   vec4 light_direction;
   vec4 lighting;
   vec4 camera_position;
+  // rgb: linear fog color; w: fog end distance, 0 disables fog.
+  vec4 fog;
 }
 vert_info;
 
@@ -19,6 +21,7 @@ out vec3 v_light_direction;
 out float v_environment;
 out vec3 v_world_position;
 out vec3 v_camera_position;
+out vec4 v_fog;
 
 void main() {
   v_texture_coords = texture_coords;
@@ -27,6 +30,7 @@ void main() {
   v_lighting = vert_info.lighting;
   v_light_direction = normalize(vert_info.light_direction.xyz);
   v_environment = vert_info.light_direction.w;
+  v_fog = vert_info.fog;
   v_world_position = (vert_info.model * vec4(position, 1.0)).xyz;
   v_camera_position = vert_info.camera_position.xyz;
   gl_Position = vert_info.mvp * vec4(position, 1.0);
