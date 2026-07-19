@@ -47,6 +47,7 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
     'scenery': Model.asset(
       'packages/glint/assets/models/low_poly_rocks_and_trees.glb',
     ),
+    'cargo': Model.asset('packages/glint/assets/models/box_animated.glb'),
   };
 
   // The dawn palette: haze shared by fog and sky so the horizon is seamless.
@@ -144,6 +145,23 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
             position: Vector3(side * (14.5 + (hash >> 4 & 0xf) / 4), .2, z),
             rotation: Vector3(0, mirror ? math.pi : 0, 0),
             scale: const Vector3(.12, .12, .12),
+          ),
+        ),
+      );
+    }
+
+    // Animated cargo crates (Khronos BoxAnimated) flip their lids trackside,
+    // driven by the game clock through the engine's animation sampler.
+    final cargoScroll = _sim.distance % 48;
+    for (var i = 0; i < 3; i++) {
+      instances.add(
+        GlintGameInstance(
+          model: 'cargo',
+          animationTime: _sim.runTime,
+          transform: Transform3D(
+            position: Vector3(5.3, 0, cargoScroll - 48.0 * i - 10),
+            rotation: const Vector3(0, -math.pi / 2, 0),
+            scale: const Vector3(.8, .8, .8),
           ),
         ),
       );
@@ -273,6 +291,7 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
             GlintGameView(
               models: _models,
               onFrame: _buildFrame,
+              showStats: true,
               environmentAsset: 'packages/glint/assets/environments/dawn.hdr',
               backgroundColor: _haze,
               fogColor: _haze,

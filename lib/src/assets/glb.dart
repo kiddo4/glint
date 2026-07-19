@@ -146,6 +146,17 @@ class GlintGlbRig {
     }
   }
 
+  /// Whether [bytes] declare any animation clips, without reading geometry.
+  static bool probeAnimations(ByteData bytes) {
+    try {
+      final animations =
+          GlintGlbMesh._containerReader(bytes).document['animations'];
+      return animations is List && animations.isNotEmpty;
+    } on Object {
+      return false;
+    }
+  }
+
   /// Column-major world transforms per node, sampling [animation] at [time]
   /// (looped over the clip's duration). Pass animation -1 for the bind pose.
   List<List<double>> nodeWorldTransforms({int animation = 0, double time = 0}) {

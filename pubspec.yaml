@@ -34,6 +34,7 @@ flutter:
     - assets/models/cone.glb
     - assets/models/disc.glb
     - assets/models/traffic_barrier.glb
+    - assets/models/box_animated.glb
     - assets/models/cc0_gold_coin_blank.glb
     - assets/models/low_poly_rocks_and_trees.glb
     - assets/environments/studio.hdr

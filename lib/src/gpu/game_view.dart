@@ -42,6 +42,8 @@ class GlintGameInstance {
     this.transform = const Transform3D(),
     this.material,
     this.translucent = false,
+    this.animationIndex = 0,
+    this.animationTime = 0,
   });
 
   /// Key into [GlintGameView.models].
@@ -56,6 +58,14 @@ class GlintGameInstance {
   /// Alpha-blends over opaque geometry without writing depth; drawn last.
   /// Use for blob shadows and other soft decals.
   final bool translucent;
+
+  /// Which of the model's animation clips to sample; ignored for models
+  /// without animations.
+  final int animationIndex;
+
+  /// Seconds into the clip; it loops over the clip duration automatically,
+  /// so passing a running game clock plays the animation continuously.
+  final double animationTime;
 }
 
 /// Everything the renderer needs to draw one game frame.
@@ -137,6 +147,7 @@ class _GlintGameViewState extends State<GlintGameView>
   // nothing per instance.
   final _uniformScratch = Float32List(52);
   final _worldScratch = vm.Matrix4.zero();
+  final _partWorldScratch = vm.Matrix4.zero();
   final _mvpScratch = vm.Matrix4.zero();
   final _cornerScratch = vm.Vector3.zero();
 
@@ -351,70 +362,98 @@ class _GlintGameViewState extends State<GlintGameView>
         if (model == null) {
           throw StateError('Unknown game model "${instance.model}".');
         }
-        final world = _composeTransform(instance.transform, _worldScratch);
-        if (!_worldBoundsVisible(frustum, world, model)) return;
-        _mvpScratch.setFrom(viewProjection);
-        _mvpScratch.multiply(world);
-        for (var i = 0; i < 16; i++) {
-          _uniformScratch[i] = _mvpScratch.storage[i];
-          _uniformScratch[16 + i] = world.storage[i];
-        }
-        pass.bindVertexBuffer(
-          gpu.BufferView(
-            model.vertexBuffer,
-            offsetInBytes: 0,
-            lengthInBytes: model.vertexByteLength,
-          ),
-          model.vertexCount,
+        final instanceWorld = _composeTransform(
+          instance.transform,
+          _worldScratch,
+        );
+        // Rigged models sample their clip once per instance; static models
+        // draw their single part with the instance transform alone.
+        final nodeWorlds = model.rig?.nodeWorldTransforms(
+          animation: instance.animationIndex,
+          time: instance.animationTime,
         );
         final material = instance.material;
         final overrideFactor = material?.linearBaseColorFactor;
-        // One draw per material batch; an instance material override wins
-        // over every submesh's authored factors.
-        for (final submesh in model.submeshes) {
-          final factor = overrideFactor ?? submesh.baseColorFactor;
-          for (var i = 0; i < 4; i++) {
-            _uniformScratch[32 + i] = factor[i];
+        for (final (nodeIndex, meshIndex) in model.parts) {
+          final buffers = model.meshes[meshIndex];
+          vm.Matrix4 world;
+          if (nodeIndex < 0 || nodeWorlds == null) {
+            world = instanceWorld;
+          } else {
+            world = _partWorldScratch
+              ..setFrom(instanceWorld)
+              ..multiply(vm.Matrix4.fromList(nodeWorlds[nodeIndex]));
           }
-          _uniformScratch[42] = material?.metallic ?? submesh.metallicFactor;
-          _uniformScratch[43] =
-              material?.roughness ?? submesh.roughnessFactor;
-          pass.bindIndexBuffer(
+          if (!_worldBoundsVisible(
+            frustum,
+            world,
+            buffers.boundsMinimum,
+            buffers.boundsMaximum,
+          )) {
+            continue;
+          }
+          _mvpScratch.setFrom(viewProjection);
+          _mvpScratch.multiply(world);
+          for (var i = 0; i < 16; i++) {
+            _uniformScratch[i] = _mvpScratch.storage[i];
+            _uniformScratch[16 + i] = world.storage[i];
+          }
+          pass.bindVertexBuffer(
             gpu.BufferView(
-              model.indexBuffer,
-              offsetInBytes: submesh.indexOffset * model.indexByteSize,
-              lengthInBytes: submesh.indexCount * model.indexByteSize,
+              buffers.vertexBuffer,
+              offsetInBytes: 0,
+              lengthInBytes: buffers.vertexByteLength,
             ),
-            model.indexType,
-            submesh.indexCount,
+            buffers.vertexCount,
           );
-          pass.bindUniform(
-            pipeline.vertexShader.getUniformSlot('VertInfo'),
-            hostBuffer.emplace(_uniformScratch.buffer.asByteData()),
-          );
-          drawCalls++;
-          triangles += submesh.indexCount ~/ 3;
-          pass.bindTexture(
-            pipeline.fragmentShader.getUniformSlot('tex'),
-            submesh.texture,
-            sampler: gpu.SamplerOptions(
-              minFilter: gpu.MinMagFilter.linear,
-              magFilter: gpu.MinMagFilter.linear,
-              widthAddressMode: gpu.SamplerAddressMode.repeat,
-              heightAddressMode: gpu.SamplerAddressMode.repeat,
-            ),
-          );
-          pass.bindTexture(
-            pipeline.fragmentShader.getUniformSlot('irradiance_map'),
-            assets.irradianceTexture,
-            sampler: environmentSampler,
-          );
-          pass.bindTexture(
-            pipeline.fragmentShader.getUniformSlot('radiance_map'),
-            assets.radianceTexture,
-            sampler: environmentSampler,
-          );
-          pass.draw();
+          // One draw per material batch; an instance material override wins
+          // over every submesh's authored factors.
+          for (final submesh in buffers.submeshes) {
+            final factor = overrideFactor ?? submesh.baseColorFactor;
+            for (var i = 0; i < 4; i++) {
+              _uniformScratch[32 + i] = factor[i];
+            }
+            _uniformScratch[42] =
+                material?.metallic ?? submesh.metallicFactor;
+            _uniformScratch[43] =
+                material?.roughness ?? submesh.roughnessFactor;
+            pass.bindIndexBuffer(
+              gpu.BufferView(
+                buffers.indexBuffer,
+                offsetInBytes: submesh.indexOffset * buffers.indexByteSize,
+                lengthInBytes: submesh.indexCount * buffers.indexByteSize,
+              ),
+              buffers.indexType,
+              submesh.indexCount,
+            );
+            pass.bindUniform(
+              pipeline.vertexShader.getUniformSlot('VertInfo'),
+              hostBuffer.emplace(_uniformScratch.buffer.asByteData()),
+            );
+            drawCalls++;
+            triangles += submesh.indexCount ~/ 3;
+            pass.bindTexture(
+              pipeline.fragmentShader.getUniformSlot('tex'),
+              submesh.texture,
+              sampler: gpu.SamplerOptions(
+                minFilter: gpu.MinMagFilter.linear,
+                magFilter: gpu.MinMagFilter.linear,
+                widthAddressMode: gpu.SamplerAddressMode.repeat,
+                heightAddressMode: gpu.SamplerAddressMode.repeat,
+              ),
+            );
+            pass.bindTexture(
+              pipeline.fragmentShader.getUniformSlot('irradiance_map'),
+              assets.irradianceTexture,
+              sampler: environmentSampler,
+            );
+            pass.bindTexture(
+              pipeline.fragmentShader.getUniformSlot('radiance_map'),
+              assets.radianceTexture,
+              sampler: environmentSampler,
+            );
+            pass.draw();
+          }
         }
       }
 
@@ -482,12 +521,13 @@ class _GlintGameViewState extends State<GlintGameView>
     return target;
   }
 
-  /// Transforms the model's local bounds corners to world space and tests
-  /// the world-aligned box against the frame's frustum.
+  /// Transforms local bounds corners to world space and tests the
+  /// world-aligned box against the frame's frustum.
   bool _worldBoundsVisible(
     GlintFrustum frustum,
     vm.Matrix4 world,
-    _GameModel model,
+    Vector3 boundsMinimum,
+    Vector3 boundsMaximum,
   ) {
     var minX = double.infinity, minY = double.infinity, minZ = double.infinity;
     var maxX = double.negativeInfinity,
@@ -495,9 +535,9 @@ class _GlintGameViewState extends State<GlintGameView>
         maxZ = double.negativeInfinity;
     for (var corner = 0; corner < 8; corner++) {
       _cornerScratch.setValues(
-        corner & 1 == 0 ? model.boundsMinimum.x : model.boundsMaximum.x,
-        corner & 2 == 0 ? model.boundsMinimum.y : model.boundsMaximum.y,
-        corner & 4 == 0 ? model.boundsMinimum.z : model.boundsMaximum.z,
+        corner & 1 == 0 ? boundsMinimum.x : boundsMaximum.x,
+        corner & 2 == 0 ? boundsMinimum.y : boundsMaximum.y,
+        corner & 4 == 0 ? boundsMinimum.z : boundsMaximum.z,
       );
       world.transform3(_cornerScratch);
       minX = math.min(minX, _cornerScratch.x);
@@ -625,11 +665,10 @@ class _GameSubmesh {
   final double roughnessFactor;
 }
 
-/// A model resident on the GPU in its authored units — game transforms are
-/// authoritative, so no centering or normalization is applied.
-class _GameModel {
-  const _GameModel({
-    required this.mesh,
+/// One mesh's GPU residency: interleaved vertices, indices, and material
+/// batches, in the mesh's own space.
+class _MeshBuffers {
+  const _MeshBuffers({
     required this.vertexBuffer,
     required this.vertexByteLength,
     required this.vertexCount,
@@ -640,7 +679,6 @@ class _GameModel {
     required this.boundsMaximum,
   });
 
-  final GlintGlbMesh mesh;
   final gpu.DeviceBuffer vertexBuffer;
   final int vertexByteLength;
   final int vertexCount;
@@ -652,9 +690,11 @@ class _GameModel {
 
   int get indexByteSize => indexType == gpu.IndexType.int32 ? 4 : 2;
 
-  static Future<_GameModel> load(Model source) async {
-    final mesh = await source.load();
-    final context = gpu.gpuContext;
+  static Future<_MeshBuffers> build(
+    GlintGlbMesh mesh,
+    gpu.GpuContext context,
+    gpu.Texture whiteTexture,
+  ) async {
     gpu.Texture uploadPixels(GlintTexturePixels pixels) {
       final texture = context.createTexture(
         gpu.StorageMode.hostVisible,
@@ -667,16 +707,9 @@ class _GameModel {
       return texture;
     }
 
-    // Untextured materials shade from their factors alone, so they share one
+    // Untextured materials shade from their factors alone and share the
     // white texel; textured materials decode capped at 1K so imported
     // photo-real assets stay within mobile memory budgets.
-    final whiteTexture = uploadPixels(
-      GlintTexturePixels(
-        width: 1,
-        height: 1,
-        bytes: ByteData(4)..setUint32(0, 0xffffffff),
-      ),
-    );
     final materialTextures = <gpu.Texture>[
       for (final material in mesh.materials)
         material.baseColorImageBytes == null
@@ -729,8 +762,7 @@ class _GameModel {
     final indexData = mesh.uses32BitIndices
         ? Uint32List.fromList(mesh.indices).buffer.asByteData()
         : Uint16List.fromList(mesh.indices).buffer.asByteData();
-    return _GameModel(
-      mesh: mesh,
+    return _MeshBuffers(
       vertexBuffer: context.createDeviceBufferWithCopy(
         vertexData.buffer.asByteData(),
       ),
@@ -751,6 +783,56 @@ class _GameModel {
         mesh.boundsMaximum[1],
         mesh.boundsMaximum[2],
       ),
+    );
+  }
+}
+
+/// A model resident on the GPU in its authored units — game transforms are
+/// authoritative, so no centering or normalization is applied. Models with
+/// animation clips keep their node hierarchy as parts; static models
+/// collapse to one baked part.
+class _GameModel {
+  const _GameModel({
+    required this.meshes,
+    required this.parts,
+    this.rig,
+  });
+
+  final List<_MeshBuffers> meshes;
+
+  /// (node index or -1 for static, index into [meshes]) per drawable part.
+  final List<(int, int)> parts;
+  final GlintGlbRig? rig;
+
+  static Future<_GameModel> load(Model source) async {
+    final context = gpu.gpuContext;
+    final whiteTexture = context.createTexture(
+      gpu.StorageMode.hostVisible,
+      1,
+      1,
+      coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
+      enableRenderTargetUsage: false,
+    )..overwrite(ByteData(4)..setUint32(0, 0xffffffff));
+    final bytes = await source.read();
+    if (GlintGlbRig.probeAnimations(bytes)) {
+      final rig = GlintGlbRig.parse(bytes, debugLabel: source.debugLabel);
+      return _GameModel(
+        meshes: [
+          for (final mesh in rig.meshes)
+            await _MeshBuffers.build(mesh, context, whiteTexture),
+        ],
+        parts: [
+          for (var i = 0; i < rig.nodes.length; i++)
+            if (rig.nodes[i].meshIndex != null)
+              (i, rig.nodes[i].meshIndex!),
+        ],
+        rig: rig,
+      );
+    }
+    final mesh = GlintGlbMesh.parse(bytes, debugLabel: source.debugLabel);
+    return _GameModel(
+      meshes: [await _MeshBuffers.build(mesh, context, whiteTexture)],
+      parts: const [(-1, 0)],
     );
   }
 }
