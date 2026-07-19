@@ -161,7 +161,8 @@ the page, two-finger and trackpad pinches orbit, pan, and zoom.
 | --- | --- |
 | iOS | Validated (60 fps on device) |
 | macOS | Validated |
-| Android | Expected to work (Impeller + Flutter GPU flag); validation pending |
+| Android (physical device) | Requires Vulkan (any modern device); flag baked into the example |
+| Android emulator | Not supported: emulators fall back to Impeller's OpenGLES backend, which Flutter GPU does not support yet — the raster thread aborts natively. Test on a physical device. |
 | Web / Windows / Linux | Not supported in v0.1 (Flutter GPU availability) |
 
 Requires Flutter 3.44+ with Impeller.
@@ -170,6 +171,11 @@ Requires Flutter 3.44+ with Impeller.
 
 - **"Flutter GPU requires the Impeller rendering backend"** — the manifest
   keys from step 1 are missing, or you ran without the flags.
+- **Native crash on Android:** `render_pass_gles.cc ... Check failed` — the
+  device (almost always an emulator) has no Vulkan, so Impeller fell back to
+  its OpenGLES backend, which Flutter GPU does not support yet. There is no
+  Dart-level API to detect or catch this today; run on a physical
+  Vulkan-capable Android device.
 - **"Missing GLB magic header"** — the file isn't a binary glTF (`.glb`).
   If it lives in Git LFS, run `git lfs pull`; a 134-byte "file" is an LFS
   pointer, not a model.
