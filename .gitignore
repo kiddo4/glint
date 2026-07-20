@@ -34,3 +34,4 @@ migrate_working_dir/
 
 # Glint website is maintained as a separate repository.
 /website/
+ROADMAP.md
