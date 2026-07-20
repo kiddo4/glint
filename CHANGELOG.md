@@ -1,3 +1,8 @@
+## 0.1.1
+
+* Rewrite the README: pub.dev badges, quick-nav links, and an FAQ covering
+  platform support and the `flutter_scene` comparison directly.
+
 ## 0.1.0
 
 The first complete Glint release: a pure-Dart 3D engine on Flutter GPU.
