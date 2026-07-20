@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 void main() {
@@ -70,7 +70,7 @@ void main() {
 
   testWidgets('the duck occludes anchors on its far side', (tester) async {
     final mesh = await tester.runAsync(
-      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/duck.glb'),
+      () => GlintGlbMesh.fromAsset('packages/glint_engine/assets/models/duck.glb'),
     );
     // The beak tip faces +x; seen from the front it is clear, while from
     // behind the duck's body blocks the line of sight.
@@ -88,7 +88,7 @@ void main() {
     tester,
   ) async {
     final mesh = await tester.runAsync(
-      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/duck.glb'),
+      () => GlintGlbMesh.fromAsset('packages/glint_engine/assets/models/duck.glb'),
     );
     final center = Vector3(
       (mesh!.boundsMinimum[0] + mesh.boundsMaximum[0]) / 2,

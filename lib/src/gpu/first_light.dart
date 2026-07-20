@@ -39,7 +39,7 @@ class GlintGpuFirstLight extends StatefulWidget {
     this.height = 1024,
     this.fallback,
     this.onError,
-    this.model = const Model.asset('packages/glint/assets/models/duck.glb'),
+    this.model = const Model.asset('packages/glint_engine/assets/models/duck.glb'),
     this.environmentAsset,
     this.material,
     this.fieldOfViewDegrees = 37.8,
@@ -182,7 +182,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     final mesh = await widget.model.load();
     final pixels = mesh.baseColorImageBytes == null
         ? await GlintTexturePixels.fromAsset(
-            'packages/glint/assets/textures/glint-grid.png',
+            'packages/glint_engine/assets/textures/glint-grid.png',
           )
         : await GlintTexturePixels.decode(
             mesh.baseColorImageBytes!,
@@ -344,7 +344,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     final cached = _pipeline;
     if (cached != null) return cached;
     final library = gpu.ShaderLibrary.fromAsset(
-      'packages/glint/shaders/glint.shaderbundle',
+      'packages/glint_engine/shaders/glint.shaderbundle',
     );
     if (library == null) {
       throw StateError('Glint shader bundle could not be loaded.');

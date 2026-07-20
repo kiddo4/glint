@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 /// Flutter widgets pinned to points on the model: anchors live in the
 /// model's own coordinate space, track it while it orbits, and obey their
@@ -15,8 +15,8 @@ class LabelsDemoPage extends StatelessWidget {
       backgroundColor: Colors.transparent,
     ),
     body: const GlintGpuFirstLight(
-      model: Model.asset('packages/glint/assets/models/duck.glb'),
-      environmentAsset: 'packages/glint/assets/environments/studio.hdr',
+      model: Model.asset('packages/glint_engine/assets/models/duck.glb'),
+      environmentAsset: 'packages/glint_engine/assets/environments/studio.hdr',
       labels: [
         Label3D(
           anchor: Vector3(.96, 1.34, -.12),

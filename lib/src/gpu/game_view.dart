@@ -253,7 +253,7 @@ class _GlintGameViewState extends State<GlintGameView>
     final cached = _pipeline;
     if (cached != null) return cached;
     final library = gpu.ShaderLibrary.fromAsset(
-      'packages/glint/shaders/glint.shaderbundle',
+      'packages/glint_engine/shaders/glint.shaderbundle',
     );
     if (library == null) {
       throw StateError('Glint shader bundle could not be loaded.');

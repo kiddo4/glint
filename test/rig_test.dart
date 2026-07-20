@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 void main() {
   testWidgets('BoxAnimated parses into a rig with clips and local meshes', (
@@ -7,7 +7,7 @@ void main() {
   ) async {
     final rig = await tester.runAsync(
       () =>
-          GlintGlbRig.fromAsset('packages/glint/assets/models/box_animated.glb'),
+          GlintGlbRig.fromAsset('packages/glint_engine/assets/models/box_animated.glb'),
     );
     expect(rig!.nodes, hasLength(4));
     expect(rig.meshes, hasLength(2));
@@ -29,7 +29,7 @@ void main() {
   ) async {
     final rig = await tester.runAsync(
       () =>
-          GlintGlbRig.fromAsset('packages/glint/assets/models/box_animated.glb'),
+          GlintGlbRig.fromAsset('packages/glint_engine/assets/models/box_animated.glb'),
     );
     final rest = rig!.nodeWorldTransforms(animation: 0, time: 0);
     final later = rig.nodeWorldTransforms(
@@ -64,11 +64,11 @@ void main() {
   ) async {
     final animated = await tester.runAsync(
       () => const Model.asset(
-        'packages/glint/assets/models/box_animated.glb',
+        'packages/glint_engine/assets/models/box_animated.glb',
       ).read(),
     );
     final static_ = await tester.runAsync(
-      () => const Model.asset('packages/glint/assets/models/duck.glb').read(),
+      () => const Model.asset('packages/glint_engine/assets/models/duck.glb').read(),
     );
     expect(GlintGlbRig.probeAnimations(animated!), isTrue);
     expect(GlintGlbRig.probeAnimations(static_!), isFalse);

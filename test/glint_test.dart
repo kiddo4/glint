@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 void main() {
   test('material converts sRGB color to a linear glTF factor', () {
@@ -68,7 +68,7 @@ void main() {
       const MaterialApp(
         home: Scene3D(
           children: [
-            Node3D(model: Model.asset('packages/glint/assets/models/duck.glb')),
+            Node3D(model: Model.asset('packages/glint_engine/assets/models/duck.glb')),
           ],
           autoRotate: false,
         ),
@@ -110,7 +110,7 @@ void main() {
               child: Scene3D(
                 children: [
                   Node3D(
-                    model: Model.asset('packages/glint/assets/models/duck.glb'),
+                    model: Model.asset('packages/glint_engine/assets/models/duck.glb'),
                   ),
                 ],
                 autoRotate: false,
@@ -184,7 +184,7 @@ void main() {
   testWidgets('packaged GLB decodes mesh accessors', (tester) async {
     final mesh = await tester.runAsync(
       () => GlintGlbMesh.fromAsset(
-        'packages/glint/assets/models/glint-prism.glb',
+        'packages/glint_engine/assets/models/glint-prism.glb',
       ),
     );
     expect(mesh!.vertexCount, 24);
@@ -203,7 +203,7 @@ void main() {
     tester,
   ) async {
     final box = await tester.runAsync(
-      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/box.glb'),
+      () => GlintGlbMesh.fromAsset('packages/glint_engine/assets/models/box.glb'),
     );
     expect(box!.vertexCount, 24);
     expect(box.indices, hasLength(36));
@@ -213,7 +213,7 @@ void main() {
     expect(box.boundsMaximum[1], closeTo(.5, 1e-6));
 
     final coin = await tester.runAsync(
-      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/coin.glb'),
+      () => GlintGlbMesh.fromAsset('packages/glint_engine/assets/models/coin.glb'),
     );
     expect(coin!.metallicFactor, 1);
     expect(coin.baseColorFactor[0], closeTo(1, 1e-6));
@@ -225,7 +225,7 @@ void main() {
     tester,
   ) async {
     final mesh = await tester.runAsync(
-      () => GlintGlbMesh.fromAsset('packages/glint/assets/models/duck.glb'),
+      () => GlintGlbMesh.fromAsset('packages/glint_engine/assets/models/duck.glb'),
     );
     expect(mesh!.vertexCount, greaterThan(1000));
     expect(mesh.indices, isNotEmpty);

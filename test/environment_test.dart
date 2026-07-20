@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 Uint8List _flatHdr(int width, int height, List<List<int>> rgbePixels) {
   final builder = BytesBuilder()
@@ -134,7 +134,7 @@ void main() {
 
 Future<Uint8List> _loadStudioAsset() async {
   final data = await rootBundle.load(
-    'packages/glint/assets/environments/studio.hdr',
+    'packages/glint_engine/assets/environments/studio.hdr',
   );
   return Uint8List.view(data.buffer, data.offsetInBytes, data.lengthInBytes);
 }

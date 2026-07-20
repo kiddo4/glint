@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 import 'duck_dash_sim.dart';
 
@@ -37,14 +37,14 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
   var _wasAirborne = false;
 
   static const _models = {
-    'duck': Model.asset('packages/glint/assets/models/duck.glb'),
-    'box': Model.asset('packages/glint/assets/models/box.glb'),
-    'disc': Model.asset('packages/glint/assets/models/disc.glb'),
-    'barrier': Model.asset('packages/glint/assets/models/traffic_barrier.glb'),
+    'duck': Model.asset('packages/glint_engine/assets/models/duck.glb'),
+    'box': Model.asset('packages/glint_engine/assets/models/box.glb'),
+    'disc': Model.asset('packages/glint_engine/assets/models/disc.glb'),
+    'barrier': Model.asset('packages/glint_engine/assets/models/traffic_barrier.glb'),
     // Heavy demo models ship with the example app, not the glint package.
     'goldcoin': Model.asset('assets/models/cc0_gold_coin_blank.glb'),
     'scenery': Model.asset('assets/models/low_poly_rocks_and_trees.glb'),
-    'cargo': Model.asset('packages/glint/assets/models/box_animated.glb'),
+    'cargo': Model.asset('packages/glint_engine/assets/models/box_animated.glb'),
   };
 
   // The dawn palette: haze shared by fog and sky so the horizon is seamless.
@@ -288,7 +288,7 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
             GlintGameView(
               models: _models,
               onFrame: _buildFrame,
-              environmentAsset: 'packages/glint/assets/environments/dawn.hdr',
+              environmentAsset: 'packages/glint_engine/assets/environments/dawn.hdr',
               backgroundColor: _haze,
               fogColor: _haze,
               fogDistance: 95,

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 /// The minimal Glint integration: one widget, one model, studio lighting,
 /// orbit gestures, and live renderer stats.
@@ -14,8 +14,8 @@ class ViewerPage extends StatelessWidget {
       backgroundColor: Colors.transparent,
     ),
     body: const GlintGpuFirstLight(
-      model: Model.asset('packages/glint/assets/models/duck.glb'),
-      environmentAsset: 'packages/glint/assets/environments/studio.hdr',
+      model: Model.asset('packages/glint_engine/assets/models/duck.glb'),
+      environmentAsset: 'packages/glint_engine/assets/environments/studio.hdr',
       showStats: true,
       fallback: Center(
         child: Text(

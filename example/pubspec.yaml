@@ -30,7 +30,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  glint:
+  glint_engine:
     path: ..
 
   # The following adds the Cupertino Icons font to your application.

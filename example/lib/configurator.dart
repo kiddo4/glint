@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 /// The flagship demo: a scrollable product page whose hero is a live 3D
 /// configurator. Ordinary Flutter widgets restyle the model, labels stay
@@ -233,14 +233,14 @@ class _ConfiguratorScene extends Scene {
   List<Light3D> get lights => const [
     AmbientLight(intensity: .26),
     DirectionalLight(direction: Vector3(.55, -1, -.65), intensity: .87),
-    EnvironmentLight(asset: 'packages/glint/assets/environments/studio.hdr'),
+    EnvironmentLight(asset: 'packages/glint_engine/assets/environments/studio.hdr'),
   ];
 
   @override
   List<Node3D> get children => [
     Node3D(
       name: 'product',
-      model: const Model.asset('packages/glint/assets/models/duck.glb'),
+      model: const Model.asset('packages/glint_engine/assets/models/duck.glb'),
       material: finish,
     ),
   ];

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 void main() {

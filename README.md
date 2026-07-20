@@ -71,7 +71,7 @@ your app so no run flags are ever needed:
 ### 2. Render a model
 
 ```dart
-import 'package:glint/glint.dart';
+import 'package:glint_engine/glint_engine.dart';
 
 GlintGpuFirstLight(
   model: Model.asset('assets/product.glb'),           // or Model.network(url)

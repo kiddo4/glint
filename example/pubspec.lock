@@ -80,7 +80,7 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  glint:
+  glint_engine:
     dependency: "direct main"
     description:
       path: ".."
