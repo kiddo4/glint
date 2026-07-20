@@ -2,7 +2,7 @@ name: glint_engine
 description: >-
   A pure-Dart 3D engine on Flutter GPU: glTF models, PBR + HDRI lighting,
   animation, tap picking, anchored widgets, and a real-time game loop.
-version: 0.1.1
+version: 0.1.2
 homepage: https://glint.kiddobuild.dev
 repository: https://github.com/kiddo4/glint
 topics:
@@ -11,6 +11,16 @@ topics:
   - rendering
   - graphics
   - flutter-gpu
+
+# pana's automatic platform detection trips on flutter_gpu's
+# dart:nativewrappers import chain and reports 0/6 platforms; declaring
+# support explicitly overrides that (see dart.dev/tools/pub/pubspec#platforms).
+# Only the platforms Glint actually runs on today — no web/windows/linux,
+# unlike flutter_scene, since there's no software-rendering fallback here.
+platforms:
+  ios:
+  macos:
+  android:
 
 environment:
   sdk: ^3.12.1

@@ -1,3 +1,11 @@
+## 0.1.2
+
+* Explicitly declare supported platforms (iOS, macOS, Android) in
+  pubspec.yaml. Pana's automatic detection reports 0/6 platforms for any
+  package depending on `flutter_gpu`, because its `dart:nativewrappers`
+  import chain isn't statically resolvable — declaring platforms overrides
+  that detection instead of waiting on it.
+
 ## 0.1.1
 
 * Rewrite the README: pub.dev badges, quick-nav links, and an FAQ covering
