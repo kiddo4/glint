@@ -14,6 +14,7 @@ import '../assets/model.dart';
 import '../assets/texture_pixels.dart';
 import '../math.dart';
 import '../scene.dart';
+import 'punctual_lights.dart';
 import 'render_stats.dart';
 
 /// A free camera for game rendering: position and target in world units.
@@ -91,6 +92,8 @@ class GlintGameView extends StatefulWidget {
     this.lightDirection = const Vector3(.55, -1, -.65),
     this.lightIntensity = 2.6,
     this.ambientIntensity = .26,
+    this.pointLights = const [],
+    this.spotLights = const [],
     this.backgroundColor = const ui.Color(0xff090b13),
     this.showStats = false,
     this.fogColor,
@@ -111,6 +114,17 @@ class GlintGameView extends StatefulWidget {
   final Vector3 lightDirection;
   final double lightIntensity;
   final double ambientIntensity;
+
+  /// Point lights placed in world space, in addition to the key light.
+  /// Combined with [spotLights], capped at [kMaxPunctualLights]. Rebuilding
+  /// this list every frame (e.g. tracking a moving instance) is expected —
+  /// like [onFrame]'s instances, it's read fresh each frame, not cached.
+  final List<PointLight> pointLights;
+
+  /// Cone-narrowed point lights. Combined with [pointLights], capped at
+  /// [kMaxPunctualLights].
+  final List<SpotLight> spotLights;
+
   final ui.Color backgroundColor;
 
   /// Overlays live FPS, frame time, draw-call, and triangle counters.
@@ -144,8 +158,10 @@ class _GlintGameViewState extends State<GlintGameView>
   final _frameTimestamps = <int>[];
 
   // Per-draw scratch state, reused every frame so the render loop allocates
-  // nothing per instance.
-  final _uniformScratch = Float32List(52);
+  // nothing per instance. Holds DrawInfo only (mvp, world, base color,
+  // material) — FrameInfo (lights, camera, fog) is built once per frame,
+  // not per draw call, since it never changes within a frame.
+  final _drawScratch = Float32List(40);
   final _worldScratch = vm.Matrix4.zero();
   final _partWorldScratch = vm.Matrix4.zero();
   final _mvpScratch = vm.Matrix4.zero();
@@ -339,24 +355,39 @@ class _GlintGameViewState extends State<GlintGameView>
       // One world-space frustum for the whole frame; instances test their
       // transformed bounds against it without per-draw plane extraction.
       final frustum = GlintFrustum.fromColumnMajor(viewProjection.storage);
-      // The static tail of the uniform block never changes within a frame.
-      for (var i = 0; i < 4; i++) {
-        _uniformScratch[44 + i] = fogUniform[i];
-      }
-      _uniformScratch[36] = widget.lightDirection.x;
-      _uniformScratch[37] = widget.lightDirection.y;
-      _uniformScratch[38] = widget.lightDirection.z;
-      _uniformScratch[39] = assets.environmentStrength;
-      _uniformScratch[40] = widget.ambientIntensity;
-      _uniformScratch[41] = widget.lightIntensity;
-      _uniformScratch[48] = camera.position.x;
-      _uniformScratch[49] = camera.position.y;
-      _uniformScratch[50] = camera.position.z;
-      _uniformScratch[51] = 0;
 
       var drawCalls = 0;
       var triangles = 0;
       final hostBuffer = context.createHostBuffer();
+      // FrameInfo never changes within a frame, so it's built and emplaced
+      // once here and the resulting buffer view is rebound (not
+      // re-emplaced) before every draw call below — the same pattern
+      // already used for the frame-constant irradiance/radiance textures.
+      final punctualLights = GlintPackedPunctualLights(
+        widget.pointLights,
+        widget.spotLights,
+      );
+      final frameInfo = hostBuffer.emplace(
+        _floats([
+          widget.lightDirection.x,
+          widget.lightDirection.y,
+          widget.lightDirection.z,
+          assets.environmentStrength,
+          widget.ambientIntensity,
+          widget.lightIntensity,
+          punctualLights.count.toDouble(),
+          0,
+          camera.position.x,
+          camera.position.y,
+          camera.position.z,
+          0,
+          ...fogUniform,
+          ...punctualLights.positionRange,
+          ...punctualLights.colorIntensity,
+          ...punctualLights.directionOuterCos,
+          ...punctualLights.innerCosFlags,
+        ]),
+      );
       void draw(GlintGameInstance instance) {
         final model = assets.models[instance.model];
         if (model == null) {
@@ -395,8 +426,8 @@ class _GlintGameViewState extends State<GlintGameView>
           _mvpScratch.setFrom(viewProjection);
           _mvpScratch.multiply(world);
           for (var i = 0; i < 16; i++) {
-            _uniformScratch[i] = _mvpScratch.storage[i];
-            _uniformScratch[16 + i] = world.storage[i];
+            _drawScratch[i] = _mvpScratch.storage[i];
+            _drawScratch[16 + i] = world.storage[i];
           }
           pass.bindVertexBuffer(
             gpu.BufferView(
@@ -411,12 +442,10 @@ class _GlintGameViewState extends State<GlintGameView>
           for (final submesh in buffers.submeshes) {
             final factor = overrideFactor ?? submesh.baseColorFactor;
             for (var i = 0; i < 4; i++) {
-              _uniformScratch[32 + i] = factor[i];
+              _drawScratch[32 + i] = factor[i];
             }
-            _uniformScratch[42] =
-                material?.metallic ?? submesh.metallicFactor;
-            _uniformScratch[43] =
-                material?.roughness ?? submesh.roughnessFactor;
+            _drawScratch[36] = material?.metallic ?? submesh.metallicFactor;
+            _drawScratch[37] = material?.roughness ?? submesh.roughnessFactor;
             pass.bindIndexBuffer(
               gpu.BufferView(
                 buffers.indexBuffer,
@@ -427,8 +456,12 @@ class _GlintGameViewState extends State<GlintGameView>
               submesh.indexCount,
             );
             pass.bindUniform(
-              pipeline.vertexShader.getUniformSlot('VertInfo'),
-              hostBuffer.emplace(_uniformScratch.buffer.asByteData()),
+              pipeline.vertexShader.getUniformSlot('DrawInfo'),
+              hostBuffer.emplace(_drawScratch.buffer.asByteData()),
+            );
+            pass.bindUniform(
+              pipeline.fragmentShader.getUniformSlot('FrameInfo'),
+              frameInfo,
             );
             drawCalls++;
             triangles += submesh.indexCount ~/ 3;
@@ -497,6 +530,9 @@ class _GlintGameViewState extends State<GlintGameView>
       rethrow;
     }
   }
+
+  ByteData _floats(List<double> values) =>
+      Float32List.fromList(values).buffer.asByteData();
 
   /// World matrix matching [Transform3D.apply]: scale, then X/Y/Z rotation,
   /// then translation. Composes into [target] to avoid per-draw allocation.

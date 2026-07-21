@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -47,6 +48,52 @@ void main() {
     expect(find.byType(GlintGpuFirstLight), findsOneWidget);
   });
 
+  test('point and spot lights default to glTF-flavored punctual fields', () {
+    const point = PointLight(position: Vector3(1, 2, 3));
+    expect(point.range, 0);
+    expect(point.intensity, 1);
+    expect(point.color, Colors.white);
+
+    const spot = SpotLight(
+      position: Vector3(0, 3, 0),
+      direction: Vector3(0, -1, 0),
+    );
+    expect(spot.innerConeAngle, 0);
+    expect(spot.outerConeAngle, closeTo(math.pi / 4, 1e-9));
+    expect(spot.range, 0);
+  });
+
+  test('point and spot lights with equal fields compare equal', () {
+    const a = PointLight(position: Vector3(1, 2, 3), range: 5);
+    const b = PointLight(position: Vector3(1, 2, 3), range: 5);
+    expect(a, b);
+    expect(a.hashCode, b.hashCode);
+    expect(a, isNot(const PointLight(position: Vector3(1, 2, 3), range: 6)));
+
+    const spotA = SpotLight(
+      position: Vector3(0, 3, 0),
+      direction: Vector3(0, -1, 0),
+      outerConeAngle: .5,
+    );
+    const spotB = SpotLight(
+      position: Vector3(0, 3, 0),
+      direction: Vector3(0, -1, 0),
+      outerConeAngle: .5,
+    );
+    expect(spotA, spotB);
+    expect(spotA.hashCode, spotB.hashCode);
+    expect(
+      spotA,
+      isNot(
+        const SpotLight(
+          position: Vector3(0, 3, 0),
+          direction: Vector3(0, -1, 0),
+          outerConeAngle: .6,
+        ),
+      ),
+    );
+  });
+
   test('transform applies scale and translation', () {
     const transform = Transform3D(
       position: Vector3(1, 2, 3),
@@ -82,6 +129,61 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('Scene3D routes point and spot lights to the GPU renderer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scene3D(
+          lights: [
+            AmbientLight(),
+            DirectionalLight(),
+            PointLight(position: Vector3(1, 2, 1)),
+            SpotLight(position: Vector3(0, 3, 0), direction: Vector3(0, -1, 0)),
+          ],
+          children: [
+            Node3D(model: Model.asset('packages/glint_engine/assets/models/duck.glb')),
+          ],
+          autoRotate: false,
+        ),
+      ),
+    );
+    expect(find.byType(GlintGpuFirstLight), findsOneWidget);
+    final rendered = tester.widget<GlintGpuFirstLight>(
+      find.byType(GlintGpuFirstLight),
+    );
+    expect(rendered.pointLights, hasLength(1));
+    expect(rendered.spotLights, hasLength(1));
+  });
+
+  testWidgets('Scene3D caps combined point/spot lights at kMaxPunctualLights', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scene3D(
+          lights: [
+            for (var i = 0; i < kMaxPunctualLights + 2; i++)
+              PointLight(position: Vector3(i.toDouble(), 0, 0)),
+            const SpotLight(
+              position: Vector3(0, 3, 0),
+              direction: Vector3(0, -1, 0),
+            ),
+          ],
+          children: const [
+            Node3D(model: Model.asset('packages/glint_engine/assets/models/duck.glb')),
+          ],
+          autoRotate: false,
+        ),
+      ),
+    );
+    final rendered = tester.widget<GlintGpuFirstLight>(
+      find.byType(GlintGpuFirstLight),
+    );
+    expect(rendered.pointLights, hasLength(kMaxPunctualLights));
+    expect(rendered.spotLights, isEmpty);
   });
 
   testWidgets('Scene3D keeps mesh-only scenes on the preview painter', (

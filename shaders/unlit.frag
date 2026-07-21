@@ -1,16 +1,40 @@
+#define MAX_PUNCTUAL_LIGHTS 4
+
 uniform sampler2D tex;
 uniform sampler2D irradiance_map;
 uniform sampler2D radiance_map;
 
+// Frame-scoped data, constant across every draw call in a frame — read
+// directly here rather than forwarded from the vertex shader as varyings,
+// since Metal caps interpolated fragment inputs at 60 components and the
+// punctual light array alone needs 64.
+uniform FrameInfo {
+  // xyz: directional key light direction, w: environment (IBL) strength switch
+  vec4 light_direction;
+  // x: ambient intensity, y: directional light intensity, z: punctual light count
+  vec4 lighting;
+  vec4 camera_position;
+  // rgb: linear fog color; w: fog end distance, 0 disables fog.
+  vec4 fog;
+  // Punctual (point/spot) lights, glTF KHR_lights_punctual-flavored. Kept as
+  // parallel vec4 arrays rather than an array of structs for portable std140
+  // layout across Impeller's Metal/GLES/Vulkan backends.
+  // xyz: world position, w: range (0 disables the range cutoff)
+  vec4 punctual_position_range[MAX_PUNCTUAL_LIGHTS];
+  // rgb: linear color, w: intensity
+  vec4 punctual_color_intensity[MAX_PUNCTUAL_LIGHTS];
+  // xyz: normalized direction (spot only), w: cos(outerConeAngle)
+  vec4 punctual_direction_outer_cos[MAX_PUNCTUAL_LIGHTS];
+  // x: cos(innerConeAngle), y: 1.0 if spot else 0.0 (point)
+  vec4 punctual_inner_cos_flags[MAX_PUNCTUAL_LIGHTS];
+}
+frame_info;
+
 in vec2 v_texture_coords;
 in vec3 v_normal;
 in vec4 v_base_color;
-in vec4 v_lighting;
-in vec3 v_light_direction;
-in float v_environment;
+in vec4 v_material;
 in vec3 v_world_position;
-in vec3 v_camera_position;
-in vec4 v_fog;
 out vec4 frag_color;
 
 const float PI = 3.14159265359;
@@ -70,6 +94,34 @@ vec3 fresnel_schlick(float cos_theta, vec3 f0) {
   return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
+// GGX diffuse+specular contribution from one light arriving along [l] with
+// the given (already attenuated) linear [radiance]. Shared by the
+// directional key light and every punctual light below.
+vec3 shade_direct(vec3 n, vec3 v, vec3 l, vec3 albedo, float metallic,
+    float roughness, vec3 radiance) {
+  vec3 h = normalize(v + l);
+  float n_dot_l = max(dot(n, l), 0.0);
+  float n_dot_v = max(dot(n, v), 0.0);
+  vec3 f0 = mix(vec3(0.04), albedo, metallic);
+  vec3 f = fresnel_schlick(max(dot(h, v), 0.0), f0);
+  float ndf = distribution_ggx(n, h, roughness);
+  float geometry = geometry_schlick_ggx(n_dot_v, roughness) *
+      geometry_schlick_ggx(n_dot_l, roughness);
+  vec3 specular = (ndf * geometry * f) /
+      max(4.0 * n_dot_v * n_dot_l, 0.0001);
+  vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / PI;
+  return (diffuse + specular) * radiance * n_dot_l;
+}
+
+// glTF KHR_lights_punctual windowed inverse-square attenuation: full
+// inverse-square with no cutoff when range is 0, otherwise smoothly zeroed
+// out by the light's range.
+float range_attenuation(float distance, float range) {
+  if (range <= 0.0) return 1.0 / max(distance * distance, 0.0001);
+  return clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0) /
+      max(distance * distance, 0.0001);
+}
+
 void main() {
   vec4 sampled = texture(tex, v_texture_coords);
   // glTF base-color textures are authored in sRGB. Flutter GPU's host-visible
@@ -77,49 +129,80 @@ void main() {
   vec3 sampled_linear = pow(sampled.rgb, vec3(2.2));
   vec4 albedo = vec4(v_base_color.rgb * sampled_linear,
       v_base_color.a * sampled.a);
-  float roughness = clamp(v_lighting.w, 0.04, 1.0);
-  float metallic = clamp(v_lighting.z, 0.0, 1.0);
+  float roughness = clamp(v_material.y, 0.04, 1.0);
+  float metallic = clamp(v_material.x, 0.0, 1.0);
   vec3 n = normalize(v_normal);
-  vec3 v = normalize(v_camera_position - v_world_position);
-  vec3 l = normalize(-v_light_direction);
-  vec3 h = normalize(v + l);
-  float n_dot_l = max(dot(n, l), 0.0);
-  float n_dot_v = max(dot(n, v), 0.0);
+  vec3 v = normalize(frame_info.camera_position.xyz - v_world_position);
+  vec3 l = normalize(-frame_info.light_direction.xyz);
+  vec3 direct = shade_direct(
+      n, v, l, albedo.rgb, metallic, roughness, vec3(frame_info.lighting.y));
+
+  // Fresnel term for the ambient/IBL branch below, reusing the directional
+  // key light's half-vector the same way the original single-light shader
+  // did — an approximation, but keeps ambient response the way it shipped.
   vec3 f0 = mix(vec3(0.04), albedo.rgb, metallic);
-  vec3 f = fresnel_schlick(max(dot(h, v), 0.0), f0);
-  float ndf = distribution_ggx(n, h, roughness);
-  float geometry = geometry_schlick_ggx(n_dot_v, roughness) *
-      geometry_schlick_ggx(n_dot_l, roughness);
-  vec3 specular = (ndf * geometry * f) /
-      max(4.0 * n_dot_v * n_dot_l, 0.0001);
-  vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo.rgb / PI;
-  vec3 direct = (diffuse + specular) * v_lighting.y * n_dot_l;
+  vec3 f = fresnel_schlick(
+      max(dot(normalize(v + l), v), 0.0), f0);
+
+  int punctual_count = int(frame_info.lighting.z);
+  for (int i = 0; i < MAX_PUNCTUAL_LIGHTS; i++) {
+    if (i >= punctual_count) break;
+    vec3 light_position = frame_info.punctual_position_range[i].xyz;
+    float range = frame_info.punctual_position_range[i].w;
+    vec3 light_color = frame_info.punctual_color_intensity[i].rgb;
+    float intensity = frame_info.punctual_color_intensity[i].w;
+    vec3 to_light = light_position - v_world_position;
+    float light_distance = length(to_light);
+    vec3 light_dir = to_light / max(light_distance, 0.0001);
+
+    float is_spot = frame_info.punctual_inner_cos_flags[i].y;
+    float cone_attenuation = 1.0;
+    if (is_spot > 0.5) {
+      vec3 spot_direction =
+          normalize(frame_info.punctual_direction_outer_cos[i].xyz);
+      float outer_cos = frame_info.punctual_direction_outer_cos[i].w;
+      float inner_cos = frame_info.punctual_inner_cos_flags[i].x;
+      float cos_angle = dot(-light_dir, spot_direction);
+      cone_attenuation = clamp(
+          (cos_angle - outer_cos) / max(inner_cos - outer_cos, 0.0001),
+          0.0, 1.0);
+    }
+
+    vec3 radiance = light_color * intensity *
+        range_attenuation(light_distance, range) * cone_attenuation;
+    direct += shade_direct(
+        n, v, light_dir, albedo.rgb, metallic, roughness, radiance);
+  }
+
   vec3 ambient;
-  if (v_environment > 0.001) {
+  if (frame_info.light_direction.w > 0.001) {
     // Image-based lighting: cosine-convolved irradiance for diffuse plus
     // roughness-matched prefiltered radiance for specular reflections.
     vec3 irradiance = decode_rgbm(texture(irradiance_map, equirect_uv(n)));
     vec3 diffuse_ibl = irradiance * albedo.rgb * (1.0 - f) * (1.0 - metallic);
     vec3 reflected = reflect(-v, n);
-    vec2 brdf = environment_brdf(n_dot_v, roughness);
+    vec2 brdf = environment_brdf(max(dot(n, v), 0.0), roughness);
     vec3 specular_ibl =
         sample_radiance(reflected, roughness) * (f0 * brdf.x + brdf.y);
-    ambient = (diffuse_ibl + specular_ibl) * v_environment;
+    ambient = (diffuse_ibl + specular_ibl) * frame_info.light_direction.w;
   } else {
     // Hemisphere ambient: full strength for up-facing normals fading toward
     // the underside, so surfaces away from the key light still read as
     // curved form instead of flattening under a constant fill.
     float sky = 0.5 + 0.5 * n.y;
-    ambient = albedo.rgb * v_lighting.x * mix(0.3, 1.0, sky);
+    ambient = albedo.rgb * frame_info.lighting.x * mix(0.3, 1.0, sky);
   }
   vec3 color = ambient + direct;
   // Linear distance fog toward the horizon color; starts at 45% of the end
   // distance so the play area stays crisp while depth melts away.
-  if (v_fog.w > 0.0) {
-    float distance_to_camera = length(v_world_position - v_camera_position);
+  if (frame_info.fog.w > 0.0) {
+    float distance_to_camera =
+        length(v_world_position - frame_info.camera_position.xyz);
     float fog_factor = clamp(
-        (distance_to_camera - v_fog.w * 0.45) / (v_fog.w * 0.55), 0.0, 1.0);
-    color = mix(color, v_fog.rgb, fog_factor);
+        (distance_to_camera - frame_info.fog.w * 0.45) /
+            (frame_info.fog.w * 0.55),
+        0.0, 1.0);
+    color = mix(color, frame_info.fog.rgb, fog_factor);
   }
   color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
   frag_color = vec4(color, albedo.a);

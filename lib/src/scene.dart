@@ -63,6 +63,84 @@ class EnvironmentLight extends Light3D {
   final String asset;
 }
 
+/// The GPU renderers carry punctual lights (point + spot) in a fixed-size
+/// uniform array. Scenes declaring more than this many combined get the
+/// first [kMaxPunctualLights] in list order; the rest are dropped (with a
+/// debug-mode warning). Keep this in sync with `MAX_PUNCTUAL_LIGHTS` in
+/// `shaders/unlit.frag`.
+const kMaxPunctualLights = 4;
+
+/// A light that radiates in all directions from a world-space point,
+/// falling off with distance. Field names follow glTF's `KHR_lights_punctual`
+/// extension, since a [SpotLight] is modeled as the same light plus a cone.
+class PointLight extends Light3D {
+  const PointLight({
+    required this.position,
+    super.color,
+    super.intensity = 1,
+    this.range = 0,
+  });
+  final Vector3 position;
+
+  /// Distance at which the light's contribution reaches zero. `0` means no
+  /// cutoff — pure inverse-square falloff.
+  final double range;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PointLight &&
+      other.position == position &&
+      other.color == color &&
+      other.intensity == intensity &&
+      other.range == range;
+
+  @override
+  int get hashCode => Object.hash(position, color, intensity, range);
+}
+
+/// A [PointLight] additionally narrowed to a cone, like a flashlight or a
+/// car headlight. [innerConeAngle] and [outerConeAngle] are radians measured
+/// from [direction]; intensity is full strength inside the inner cone and
+/// smoothly fades to zero at the outer cone.
+class SpotLight extends Light3D {
+  const SpotLight({
+    required this.position,
+    required this.direction,
+    super.color,
+    super.intensity = 1,
+    this.range = 0,
+    this.innerConeAngle = 0,
+    this.outerConeAngle = math.pi / 4,
+  });
+  final Vector3 position;
+  final Vector3 direction;
+  final double range;
+  final double innerConeAngle;
+  final double outerConeAngle;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SpotLight &&
+      other.position == position &&
+      other.direction == direction &&
+      other.color == color &&
+      other.intensity == intensity &&
+      other.range == range &&
+      other.innerConeAngle == innerConeAngle &&
+      other.outerConeAngle == outerConeAngle;
+
+  @override
+  int get hashCode => Object.hash(
+        position,
+        direction,
+        color,
+        intensity,
+        range,
+        innerConeAngle,
+        outerConeAngle,
+      );
+}
+
 class Material3D {
   const Material3D({
     this.color = const Color(0xff7c5cff),

@@ -234,6 +234,15 @@ class _ConfiguratorScene extends Scene {
     AmbientLight(intensity: .26),
     DirectionalLight(direction: Vector3(.55, -1, -.65), intensity: .87),
     EnvironmentLight(asset: 'packages/glint_engine/assets/environments/studio.hdr'),
+    // A warm accent light off to one side — the kind of rim highlight a
+    // product shot would use, distinct from the cool key/ambient setup.
+    // Positions are in the model's normalized space (the largest extent is
+    // scaled to fit ~2.5 units), so this sits just off the duck's shoulder.
+    PointLight(
+      position: Vector3(1.7, 1.3, 1.9),
+      color: Color(0xffffc266),
+      intensity: 3.5,
+    ),
   ];
 
   @override

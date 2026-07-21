@@ -125,6 +125,17 @@ class _Scene3DState extends State<Scene3D> with SingleTickerProviderStateMixin {
         (sum, light) => sum + light.intensity,
       );
       final environment = lights.whereType<EnvironmentLight>().firstOrNull;
+      // The GPU renderers carry a fixed-size punctual light array; combined
+      // point + spot lights beyond kMaxPunctualLights are dropped (point
+      // lights first, then spot lights), matching GlintPackedPunctualLights.
+      final pointLights = lights
+          .whereType<PointLight>()
+          .take(kMaxPunctualLights)
+          .toList();
+      final spotLights = lights
+          .whereType<SpotLight>()
+          .take(kMaxPunctualLights - pointLights.length)
+          .toList();
       final perspective = camera is PerspectiveCamera ? camera : null;
       return ClipRect(
         child: GlintGpuFirstLight(
@@ -139,6 +150,8 @@ class _Scene3DState extends State<Scene3D> with SingleTickerProviderStateMixin {
           // preview painter's normalized intensities.
           lightIntensity: (directional?.intensity ?? .85) * 3,
           ambientIntensity: ambient,
+          pointLights: pointLights,
+          spotLights: spotLights,
           backgroundColor: widget.backgroundColor,
           autoRotate: widget.autoRotate,
           enableGestures: widget.enableGestures,

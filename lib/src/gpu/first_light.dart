@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_gpu/gpu.dart' as gpu;
@@ -15,6 +16,7 @@ import '../assets/model.dart';
 import '../labels.dart';
 import '../math.dart';
 import '../scene.dart';
+import 'punctual_lights.dart';
 import 'render_stats.dart';
 
 /// How the viewport competes with surrounding widgets for drag gestures.
@@ -47,6 +49,8 @@ class GlintGpuFirstLight extends StatefulWidget {
     this.lightDirection = const Vector3(.55, -1, -.65),
     this.lightIntensity = 2.6,
     this.ambientIntensity = .26,
+    this.pointLights = const [],
+    this.spotLights = const [],
     this.backgroundColor = const ui.Color(0xff090b13),
     this.autoRotate = true,
     this.enableGestures = true,
@@ -87,6 +91,14 @@ class GlintGpuFirstLight extends StatefulWidget {
 
   /// Hemisphere ambient strength, used only without an environment.
   final double ambientIntensity;
+
+  /// Point lights placed in world space, in addition to the key light.
+  /// Combined with [spotLights], capped at [kMaxPunctualLights].
+  final List<PointLight> pointLights;
+
+  /// Cone-narrowed point lights. Combined with [pointLights], capped at
+  /// [kMaxPunctualLights].
+  final List<SpotLight> spotLights;
 
   final ui.Color backgroundColor;
 
@@ -170,6 +182,8 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         oldWidget.lightDirection != widget.lightDirection ||
         oldWidget.lightIntensity != widget.lightIntensity ||
         oldWidget.ambientIntensity != widget.ambientIntensity ||
+        !listEquals(oldWidget.pointLights, widget.pointLights) ||
+        !listEquals(oldWidget.spotLights, widget.spotLights) ||
         oldWidget.backgroundColor != widget.backgroundColor) {
       _scheduleRender();
     }
@@ -488,12 +502,27 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       final mvp = _modelViewProjection();
       final material = widget.material;
       pass.bindUniform(
-        pipeline.vertexShader.getUniformSlot('VertInfo'),
+        pipeline.vertexShader.getUniformSlot('DrawInfo'),
         hostBuffer.emplace(
           _floats([
             ...mvp.storage,
             ...model.storage,
             ...material?.linearBaseColorFactor ?? mesh.baseColorFactor,
+            material?.metallic ?? mesh.metallicFactor,
+            material?.roughness ?? mesh.roughnessFactor,
+            0,
+            0,
+          ]),
+        ),
+      );
+      final punctualLights = GlintPackedPunctualLights(
+        widget.pointLights,
+        widget.spotLights,
+      );
+      pass.bindUniform(
+        pipeline.fragmentShader.getUniformSlot('FrameInfo'),
+        hostBuffer.emplace(
+          _floats([
             // The fourth light component switches the shader to image-based
             // ambient lighting when an environment is loaded.
             widget.lightDirection.x,
@@ -502,8 +531,8 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             prepared.environmentStrength,
             widget.ambientIntensity,
             widget.lightIntensity,
-            material?.metallic ?? mesh.metallicFactor,
-            material?.roughness ?? mesh.roughnessFactor,
+            punctualLights.count.toDouble(),
+            0,
             0,
             0,
             _distance,
@@ -513,6 +542,10 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             0,
             0,
             0,
+            ...punctualLights.positionRange,
+            ...punctualLights.colorIntensity,
+            ...punctualLights.directionOuterCos,
+            ...punctualLights.innerCosFlags,
           ]),
         ),
       );
