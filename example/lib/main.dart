@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'configurator.dart';
 import 'duck_dash.dart';
 import 'labels_demo.dart';
+import 'skinned_character_demo.dart';
 import 'viewer.dart';
 
 void main() => runApp(const GlintShowcase());
@@ -22,7 +23,7 @@ class GlintShowcase extends StatelessWidget {
         brightness: Brightness.dark,
       ),
     ),
-    home: const _LauncherPage(),
+    home: const SkinnedCharacterDemoPage(),
   );
 }
 
@@ -84,6 +85,14 @@ class _LauncherPage extends StatelessWidget {
                   'when the geometry occludes their anchor.',
               icon: Icons.label_outline,
               builder: (_) => const LabelsDemoPage(),
+            ),
+            _DemoCard(
+              title: 'Skinned character',
+              subtitle:
+                  'Real vertex-level bone deformation in the game loop — a '
+                  'walking animated fox, not just rigid node motion.',
+              icon: Icons.accessibility_new,
+              builder: (_) => const SkinnedCharacterDemoPage(),
             ),
           ],
         ),

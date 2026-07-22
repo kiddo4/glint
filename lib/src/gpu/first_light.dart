@@ -18,6 +18,7 @@ import '../math.dart';
 import '../scene.dart';
 import 'punctual_lights.dart';
 import 'render_stats.dart';
+import 'shadow.dart';
 
 /// How the viewport competes with surrounding widgets for drag gestures.
 enum GlintGestureMode {
@@ -51,6 +52,7 @@ class GlintGpuFirstLight extends StatefulWidget {
     this.ambientIntensity = .26,
     this.pointLights = const [],
     this.spotLights = const [],
+    this.enableShadows = false,
     this.backgroundColor = const ui.Color(0xff090b13),
     this.autoRotate = true,
     this.enableGestures = true,
@@ -100,6 +102,10 @@ class GlintGpuFirstLight extends StatefulWidget {
   /// [kMaxPunctualLights].
   final List<SpotLight> spotLights;
 
+  /// Casts a shadow from the directional key light. Off by default: it's an
+  /// extra full-scene depth pass every frame.
+  final bool enableShadows;
+
   final ui.Color backgroundColor;
 
   final bool autoRotate;
@@ -138,6 +144,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
   Duration _lastTick = Duration.zero;
   Timer? _resumeTimer;
   gpu.RenderPipeline? _pipeline;
+  gpu.RenderPipeline? _shadowPipeline;
   double _yaw = 0;
   double _pitch = _initialPitch;
   late double _distance = widget.initialDistance;
@@ -159,6 +166,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     super.reassemble();
     // Hot reload: pick up edited scene parameters and shaders immediately.
     _pipeline = null;
+    _shadowPipeline = null;
     _scheduleRender();
   }
 
@@ -184,6 +192,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         oldWidget.ambientIntensity != widget.ambientIntensity ||
         !listEquals(oldWidget.pointLights, widget.pointLights) ||
         !listEquals(oldWidget.spotLights, widget.spotLights) ||
+        oldWidget.enableShadows != widget.enableShadows ||
         oldWidget.backgroundColor != widget.backgroundColor) {
       _scheduleRender();
     }
@@ -236,6 +245,10 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             GlintEnvironment.radianceWidth,
             GlintEnvironment.radianceHeight * GlintEnvironment.levelCount,
           );
+    // The shader always samples shadow_map; when enableShadows is false the
+    // shadow branch never runs, so this fallback's content never actually
+    // gets read — it only needs to exist to satisfy the binding.
+    final shadowFallbackTexture = upload(blackTexel, 1, 1);
     final center = [
       (mesh.boundsMinimum[0] + mesh.boundsMaximum[0]) / 2,
       (mesh.boundsMinimum[1] + mesh.boundsMaximum[1]) / 2,
@@ -274,6 +287,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       baseColorTexture: baseColorTexture,
       irradianceTexture: irradianceTexture,
       radianceTexture: radianceTexture,
+      shadowFallbackTexture: shadowFallbackTexture,
       environmentStrength: environment == null ? 0 : 1,
       center: Vector3(center[0], center[1], center[2]),
       assetScale: assetScale,
@@ -371,6 +385,23 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     return _pipeline = context.createRenderPipeline(vertex, fragment);
   }
 
+  gpu.RenderPipeline _obtainShadowPipeline(gpu.GpuContext context) {
+    final cached = _shadowPipeline;
+    if (cached != null) return cached;
+    final library = gpu.ShaderLibrary.fromAsset(
+      'packages/glint_engine/shaders/glint.shaderbundle',
+    );
+    if (library == null) {
+      throw StateError('Glint shader bundle could not be loaded.');
+    }
+    final vertex = library['ShadowVertex'];
+    final fragment = library['ShadowFragment'];
+    if (vertex == null || fragment == null) {
+      throw StateError('Glint shadow shader entry points are missing.');
+    }
+    return _shadowPipeline = context.createRenderPipeline(vertex, fragment);
+  }
+
   /// The camera matrix for the current orbit state, shared by rendering and
   /// tap picking so both always agree on what is on screen.
   vm.Matrix4 _modelViewProjection() {
@@ -458,6 +489,99 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       final hostBuffer = context.createHostBuffer();
       final model = _modelMatrix();
 
+      // Directional shadow map: rendered in its own CommandBuffer, submitted
+      // and awaited before the main color pass is built. Two RenderPasses
+      // sharing one CommandBuffer crashes natively on this Flutter GPU
+      // version (confirmed on-device) — each pass gets its own buffer
+      // instead, the same pattern flutter_scene's multi-pass techniques use.
+      // Depth is written manually into a plain color texture's red channel
+      // (gl_FragCoord.z in shadow.frag) rather than sampled back from a
+      // native depth+stencil attachment, which isn't reliably sample-able
+      // as sampler2D in a later pass here either.
+      gpu.Texture shadowMapTexture = prepared.shadowFallbackTexture;
+      final boundsExtent = prepared.boundsMaximum - prepared.boundsMinimum;
+      final lightViewProjection = directionalLightViewProjection(
+        lightDirection: widget.lightDirection,
+        boundsCenter: Vector3(
+          (prepared.boundsMinimum.x + prepared.boundsMaximum.x) / 2,
+          (prepared.boundsMinimum.y + prepared.boundsMaximum.y) / 2,
+          (prepared.boundsMinimum.z + prepared.boundsMaximum.z) / 2,
+        ),
+        radius: boundsExtent.length / 2,
+      );
+      if (widget.enableShadows) {
+        final shadowPipeline = _obtainShadowPipeline(context);
+        final shadowColorTexture = context.createTexture(
+          gpu.StorageMode.devicePrivate,
+          kShadowMapSize,
+          kShadowMapSize,
+          format: gpu.PixelFormat.r32g32b32a32Float,
+        );
+        final shadowDepthTexture = context.createTexture(
+          gpu.StorageMode.deviceTransient,
+          kShadowMapSize,
+          kShadowMapSize,
+          format: context.defaultDepthStencilFormat,
+        );
+        final shadowCommandBuffer = context.createCommandBuffer();
+        final shadowHostBuffer = context.createHostBuffer();
+        final shadowPass = shadowCommandBuffer.createRenderPass(
+          gpu.RenderTarget.singleColor(
+            gpu.ColorAttachment(
+              texture: shadowColorTexture,
+              // 1.0 in the red channel decodes as "far" — texels no caster
+              // covers read as unshadowed.
+              clearValue: vm.Vector4(1, 1, 1, 1),
+            ),
+            depthStencilAttachment: gpu.DepthStencilAttachment(
+              texture: shadowDepthTexture,
+              depthClearValue: 1,
+            ),
+          ),
+        );
+        shadowPass.bindPipeline(shadowPipeline);
+        shadowPass.setDepthWriteEnable(true);
+        shadowPass.setDepthCompareOperation(gpu.CompareFunction.less);
+        shadowPass.setWindingOrder(gpu.WindingOrder.counterClockwise);
+        shadowPass.setCullMode(gpu.CullMode.backFace);
+        shadowPass.bindVertexBuffer(
+          gpu.BufferView(
+            prepared.vertexBuffer,
+            offsetInBytes: 0,
+            lengthInBytes: prepared.vertexByteLength,
+          ),
+          mesh.vertexCount,
+        );
+        shadowPass.bindIndexBuffer(
+          gpu.BufferView(
+            prepared.indexBuffer,
+            offsetInBytes: 0,
+            lengthInBytes: prepared.indexByteLength,
+          ),
+          prepared.indexType,
+          mesh.indices.length,
+        );
+        shadowPass.bindUniform(
+          shadowPipeline.vertexShader.getUniformSlot('ShadowDrawInfo'),
+          shadowHostBuffer.emplace(
+            _floats((lightViewProjection * model as vm.Matrix4).storage),
+          ),
+        );
+        shadowPass.draw();
+        final shadowCompleter = Completer<void>();
+        shadowCommandBuffer.submit(
+          completionCallback: (success) {
+            success
+                ? shadowCompleter.complete()
+                : shadowCompleter.completeError(
+                    StateError('Shadow pass GPU submission failed.'),
+                  );
+          },
+        );
+        await shadowCompleter.future;
+        shadowMapTexture = shadowColorTexture;
+      }
+
       final target = gpu.RenderTarget.singleColor(
         gpu.ColorAttachment(
           texture: texture,
@@ -533,7 +657,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             widget.ambientIntensity,
             widget.lightIntensity,
             punctualLights.count.toDouble(),
-            0,
+            widget.enableShadows ? 1.0 : 0.0,
             0,
             0,
             _distance,
@@ -543,11 +667,22 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             0,
             0,
             0,
+            ...lightViewProjection.storage,
             ...punctualLights.positionRange,
             ...punctualLights.colorIntensity,
             ...punctualLights.directionOuterCos,
             ...punctualLights.innerCosFlags,
           ]),
+        ),
+      );
+      pass.bindTexture(
+        pipeline.fragmentShader.getUniformSlot('shadow_map'),
+        shadowMapTexture,
+        sampler: gpu.SamplerOptions(
+          minFilter: gpu.MinMagFilter.linear,
+          magFilter: gpu.MinMagFilter.linear,
+          widthAddressMode: gpu.SamplerAddressMode.clampToEdge,
+          heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
         ),
       );
       pass.bindTexture(
@@ -821,6 +956,7 @@ class _PreparedModel {
     required this.baseColorTexture,
     required this.irradianceTexture,
     required this.radianceTexture,
+    required this.shadowFallbackTexture,
     required this.environmentStrength,
     required this.center,
     required this.assetScale,
@@ -839,6 +975,10 @@ class _PreparedModel {
   /// Prefiltered IBL maps; one black texel each when no environment is set.
   final gpu.Texture irradianceTexture;
   final gpu.Texture radianceTexture;
+
+  /// Bound to `shadow_map` when [GlintGpuFirstLight.enableShadows] is
+  /// false; its content is never actually sampled in that case.
+  final gpu.Texture shadowFallbackTexture;
   final double environmentStrength;
 
   /// The centering translation and uniform scale applied to the uploaded

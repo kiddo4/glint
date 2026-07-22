@@ -17,6 +17,13 @@ import '../scene.dart';
 import 'punctual_lights.dart';
 import 'render_stats.dart';
 
+/// Fixed size of the `joint_matrices` uniform array in
+/// `shaders/skinned_unlit.vert` — generous for typical mobile-game
+/// character rigs, bounded so the uniform buffer size stays fixed and
+/// known. A skin with more joints than this has the rest silently dropped,
+/// with a debug-mode warning.
+const kMaxJointsPerSkin = 64;
+
 /// A free camera for game rendering: position and target in world units.
 class GlintGameCamera {
   const GlintGameCamera({
@@ -165,6 +172,7 @@ class _GlintGameViewState extends State<GlintGameView>
   Ticker? _ticker;
   Duration _lastTick = Duration.zero;
   gpu.RenderPipeline? _pipeline;
+  gpu.RenderPipeline? _skinnedPipeline;
   bool _rendering = false;
   bool _failed = false;
 
@@ -176,6 +184,11 @@ class _GlintGameViewState extends State<GlintGameView>
   // material) — FrameInfo (lights, camera, fog) is built once per frame,
   // not per draw call, since it never changes within a frame.
   final _drawScratch = Float32List(40);
+  // Skinned parts use a separate, wider scratch (mvp, world, base color,
+  // material, plus kMaxJointsPerSkin joint matrices) instead of resizing
+  // _drawScratch per draw, so unskinned draws — the majority — never touch
+  // the larger buffer.
+  final _skinnedDrawScratch = Float32List(40 + kMaxJointsPerSkin * 16);
   final _worldScratch = vm.Matrix4.zero();
   final _partWorldScratch = vm.Matrix4.zero();
   final _mvpScratch = vm.Matrix4.zero();
@@ -193,6 +206,7 @@ class _GlintGameViewState extends State<GlintGameView>
   void reassemble() {
     super.reassemble();
     _pipeline = null;
+    _skinnedPipeline = null;
     _failed = false;
   }
 
@@ -296,12 +310,30 @@ class _GlintGameViewState extends State<GlintGameView>
     return _pipeline = context.createRenderPipeline(vertex, fragment);
   }
 
+  gpu.RenderPipeline _obtainSkinnedPipeline(gpu.GpuContext context) {
+    final cached = _skinnedPipeline;
+    if (cached != null) return cached;
+    final library = gpu.ShaderLibrary.fromAsset(
+      'packages/glint_engine/shaders/glint.shaderbundle',
+    );
+    if (library == null) {
+      throw StateError('Glint shader bundle could not be loaded.');
+    }
+    final vertex = library['SkinnedUnlitVertex'];
+    final fragment = library['UnlitFragment'];
+    if (vertex == null || fragment == null) {
+      throw StateError('Glint skinned shader entry points are missing.');
+    }
+    return _skinnedPipeline = context.createRenderPipeline(vertex, fragment);
+  }
+
   Future<ui.Image> _render(GlintGameFrame frame) async {
     try {
       final stopwatch = Stopwatch()..start();
       final assets = await _assets;
       final context = gpu.gpuContext;
       final pipeline = _obtainPipeline(context);
+      final skinnedPipeline = _obtainSkinnedPipeline(context);
       final texture = context.createTexture(
         gpu.StorageMode.devicePrivate,
         widget.width,
@@ -448,6 +480,22 @@ class _GlintGameViewState extends State<GlintGameView>
           ...punctualLights.innerCosFlags,
         ]),
       );
+      // Tracks whichever pipeline is currently bound so consecutive parts of
+      // the same kind (the common case — a frame is mostly static scenery)
+      // don't rebind on every draw call.
+      gpu.RenderPipeline? currentPipeline = pipeline;
+      void useGeometryPipeline(gpu.RenderPipeline target) {
+        if (identical(currentPipeline, target)) return;
+        pass.bindPipeline(target);
+        // Depth-write and blend state are phase-scoped (opaque vs.
+        // translucent, set around the two draw loops below), not
+        // pipeline-scoped, so only winding/cull — identical for every
+        // pipeline this renderer uses — need reapplying on switch.
+        pass.setWindingOrder(gpu.WindingOrder.counterClockwise);
+        pass.setCullMode(gpu.CullMode.backFace);
+        currentPipeline = target;
+      }
+
       void draw(GlintGameInstance instance) {
         final model = assets.models[instance.model];
         if (model == null) {
@@ -485,10 +533,28 @@ class _GlintGameViewState extends State<GlintGameView>
           }
           _mvpScratch.setFrom(viewProjection);
           _mvpScratch.multiply(world);
-          for (var i = 0; i < 16; i++) {
-            _drawScratch[i] = _mvpScratch.storage[i];
-            _drawScratch[16 + i] = world.storage[i];
+
+          List<List<double>>? jointMatrices;
+          if (buffers.isSkinned) {
+            final skinIndex = model.rig!.nodes[nodeIndex].skinIndex!;
+            jointMatrices = model.rig!.jointMatrices(
+              skinIndex,
+              nodeIndex,
+              animation: instance.animationIndex,
+              time: instance.animationTime,
+            );
+            if (jointMatrices.length > kMaxJointsPerSkin) {
+              assert(() {
+                debugPrint(
+                  'Glint: skin has ${jointMatrices!.length} joints, only '
+                  '$kMaxJointsPerSkin render.',
+                );
+                return true;
+              }());
+            }
           }
+          useGeometryPipeline(buffers.isSkinned ? skinnedPipeline : pipeline);
+
           pass.bindVertexBuffer(
             gpu.BufferView(
               buffers.vertexBuffer,
@@ -501,11 +567,6 @@ class _GlintGameViewState extends State<GlintGameView>
           // over every submesh's authored factors.
           for (final submesh in buffers.submeshes) {
             final factor = overrideFactor ?? submesh.baseColorFactor;
-            for (var i = 0; i < 4; i++) {
-              _drawScratch[32 + i] = factor[i];
-            }
-            _drawScratch[36] = material?.metallic ?? submesh.metallicFactor;
-            _drawScratch[37] = material?.roughness ?? submesh.roughnessFactor;
             pass.bindIndexBuffer(
               gpu.BufferView(
                 buffers.indexBuffer,
@@ -515,10 +576,50 @@ class _GlintGameViewState extends State<GlintGameView>
               buffers.indexType,
               submesh.indexCount,
             );
-            pass.bindUniform(
-              pipeline.vertexShader.getUniformSlot('DrawInfo'),
-              hostBuffer.emplace(_drawScratch.buffer.asByteData()),
-            );
+            if (buffers.isSkinned) {
+              for (var i = 0; i < 16; i++) {
+                _skinnedDrawScratch[i] = _mvpScratch.storage[i];
+                _skinnedDrawScratch[16 + i] = world.storage[i];
+              }
+              for (var i = 0; i < 4; i++) {
+                _skinnedDrawScratch[32 + i] = factor[i];
+              }
+              _skinnedDrawScratch[36] =
+                  material?.metallic ?? submesh.metallicFactor;
+              _skinnedDrawScratch[37] =
+                  material?.roughness ?? submesh.roughnessFactor;
+              final jointCount = math.min(
+                jointMatrices!.length,
+                kMaxJointsPerSkin,
+              );
+              for (var j = 0; j < jointCount; j++) {
+                final joint = jointMatrices[j];
+                for (var i = 0; i < 16; i++) {
+                  _skinnedDrawScratch[40 + j * 16 + i] = joint[i];
+                }
+              }
+              pass.bindUniform(
+                skinnedPipeline.vertexShader.getUniformSlot(
+                  'SkinnedDrawInfo',
+                ),
+                hostBuffer.emplace(_skinnedDrawScratch.buffer.asByteData()),
+              );
+            } else {
+              for (var i = 0; i < 16; i++) {
+                _drawScratch[i] = _mvpScratch.storage[i];
+                _drawScratch[16 + i] = world.storage[i];
+              }
+              for (var i = 0; i < 4; i++) {
+                _drawScratch[32 + i] = factor[i];
+              }
+              _drawScratch[36] = material?.metallic ?? submesh.metallicFactor;
+              _drawScratch[37] =
+                  material?.roughness ?? submesh.roughnessFactor;
+              pass.bindUniform(
+                pipeline.vertexShader.getUniformSlot('DrawInfo'),
+                hostBuffer.emplace(_drawScratch.buffer.asByteData()),
+              );
+            }
             pass.bindUniform(
               pipeline.fragmentShader.getUniformSlot('FrameInfo'),
               frameInfo,
@@ -773,6 +874,7 @@ class _MeshBuffers {
     required this.submeshes,
     required this.boundsMinimum,
     required this.boundsMaximum,
+    required this.isSkinned,
   });
 
   final gpu.DeviceBuffer vertexBuffer;
@@ -783,6 +885,11 @@ class _MeshBuffers {
   final List<_GameSubmesh> submeshes;
   final Vector3 boundsMinimum;
   final Vector3 boundsMaximum;
+
+  /// Whether this mesh's vertex buffer uses the wider skinned layout
+  /// (position, uv, normal, joint indices, joint weights) and needs the
+  /// SkinnedUnlitVertex pipeline instead of UnlitVertex.
+  final bool isSkinned;
 
   int get indexByteSize => indexType == gpu.IndexType.int32 ? 4 : 2;
 
@@ -845,15 +952,26 @@ class _MeshBuffers {
                     mesh.materials[submesh.materialIndex].roughnessFactor,
               ),
           ];
-    final vertexData = Float32List(mesh.vertexCount * 8);
+    // Skinned meshes get a wider stride (position, uv, normal, joint
+    // indices, joint weights); unskinned meshes keep the original layout
+    // unchanged — the vast majority of any scene's geometry is static and
+    // shouldn't carry unused skinning data.
+    final stride = mesh.isSkinned ? 16 : 8;
+    final vertexData = Float32List(mesh.vertexCount * stride);
     for (var i = 0; i < mesh.vertexCount; i++) {
-      final base = i * 8;
+      final base = i * stride;
       for (var axis = 0; axis < 3; axis++) {
         vertexData[base + axis] = mesh.positions[i * 3 + axis];
         vertexData[base + 5 + axis] = mesh.normals[i * 3 + axis];
       }
       vertexData[base + 3] = mesh.textureCoordinates[i * 2];
       vertexData[base + 4] = mesh.textureCoordinates[i * 2 + 1];
+      if (mesh.isSkinned) {
+        for (var c = 0; c < 4; c++) {
+          vertexData[base + 8 + c] = mesh.joints[i * 4 + c];
+          vertexData[base + 12 + c] = mesh.weights[i * 4 + c];
+        }
+      }
     }
     final indexData = mesh.uses32BitIndices
         ? Uint32List.fromList(mesh.indices).buffer.asByteData()
@@ -879,6 +997,7 @@ class _MeshBuffers {
         mesh.boundsMaximum[1],
         mesh.boundsMaximum[2],
       ),
+      isSkinned: mesh.isSkinned,
     );
   }
 }

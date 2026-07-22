@@ -3,6 +3,7 @@
 uniform sampler2D tex;
 uniform sampler2D irradiance_map;
 uniform sampler2D radiance_map;
+uniform sampler2D shadow_map;
 
 // Frame-scoped data, constant across every draw call in a frame — read
 // directly here rather than forwarded from the vertex shader as varyings,
@@ -11,11 +12,15 @@ uniform sampler2D radiance_map;
 uniform FrameInfo {
   // xyz: directional key light direction, w: environment (IBL) strength switch
   vec4 light_direction;
-  // x: ambient intensity, y: directional light intensity, z: punctual light count
+  // x: ambient intensity, y: directional light intensity, z: punctual light
+  // count, w: 1.0 enables the directional shadow map, 0.0 disables it
   vec4 lighting;
   vec4 camera_position;
   // rgb: linear fog color; w: fog end distance, 0 disables fog.
   vec4 fog;
+  // World-space-to-light-clip-space matrix for the directional shadow map.
+  // Ignored when lighting.w is 0.
+  mat4 shadow_view_projection;
   // Punctual (point/spot) lights, glTF KHR_lights_punctual-flavored. Kept as
   // parallel vec4 arrays rather than an array of structs for portable std140
   // layout across Impeller's Metal/GLES/Vulkan backends.
@@ -122,6 +127,29 @@ float range_attenuation(float distance, float range) {
       max(distance * distance, 0.0001);
 }
 
+// How much of the directional light reaches [world_position]: 1.0 in full
+// light, a fractional value in shadow (not 0, so shadowed surfaces still
+// read ambient/IBL rather than going flat black). Points outside the
+// shadow frustum are treated as unshadowed rather than clamped dark, since
+// "off the edge of the shadow map" isn't the same claim as "occluded".
+// shadow_map's red channel holds window-space depth written directly by
+// the shadow pass's fragment shader (gl_FragCoord.z) — a plain color
+// texture, not a sampled depth+stencil attachment.
+float directional_shadow(vec3 world_position, float n_dot_l) {
+  vec4 light_clip = frame_info.shadow_view_projection * vec4(world_position, 1.0);
+  vec3 light_ndc = light_clip.xyz / light_clip.w;
+  vec3 shadow_uv = light_ndc * 0.5 + 0.5;
+  if (shadow_uv.x < 0.0 || shadow_uv.x > 1.0 || shadow_uv.y < 0.0 ||
+      shadow_uv.y > 1.0 || shadow_uv.z < 0.0 || shadow_uv.z > 1.0) {
+    return 1.0;
+  }
+  // Slope-scaled bias: surfaces closer to grazing the light need a larger
+  // bias to avoid self-shadowing acne.
+  float bias = max(0.0025 * (1.0 - n_dot_l), 0.0006);
+  float occluder_depth = texture(shadow_map, shadow_uv.xy).r;
+  return shadow_uv.z - bias > occluder_depth ? 0.35 : 1.0;
+}
+
 void main() {
   vec4 sampled = texture(tex, v_texture_coords);
   // glTF base-color textures are authored in sRGB. Flutter GPU's host-visible
@@ -134,8 +162,12 @@ void main() {
   vec3 n = normalize(v_normal);
   vec3 v = normalize(frame_info.camera_position.xyz - v_world_position);
   vec3 l = normalize(-frame_info.light_direction.xyz);
+  float directional_n_dot_l = max(dot(n, l), 0.0);
   vec3 direct = shade_direct(
       n, v, l, albedo.rgb, metallic, roughness, vec3(frame_info.lighting.y));
+  if (frame_info.lighting.w > 0.5) {
+    direct *= directional_shadow(v_world_position, directional_n_dot_l);
+  }
 
   // Fresnel term for the ambient/IBL branch below, reusing the directional
   // key light's half-vector the same way the original single-light shader

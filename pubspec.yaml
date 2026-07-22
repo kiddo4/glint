@@ -54,6 +54,8 @@ flutter:
     - assets/models/disc.glb
     - assets/models/traffic_barrier.glb
     - assets/models/box_animated.glb
+    - assets/models/fox.glb
+    - assets/models/simple_skin.glb
     - assets/environments/studio.hdr
     - assets/environments/dawn.hdr
 

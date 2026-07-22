@@ -16,6 +16,7 @@ class ViewerPage extends StatelessWidget {
     body: const GlintGpuFirstLight(
       model: Model.asset('packages/glint_engine/assets/models/duck.glb'),
       environmentAsset: 'packages/glint_engine/assets/environments/studio.hdr',
+      enableShadows: true,
       showStats: true,
       fallback: Center(
         child: Text(

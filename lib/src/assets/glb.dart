@@ -48,6 +48,7 @@ class GlintGlbNode {
     this.rotationQuaternion = const [0, 0, 0, 1],
     this.scale = const [1, 1, 1],
     this.matrix,
+    this.skinIndex,
   });
 
   final String? name;
@@ -62,6 +63,26 @@ class GlintGlbNode {
   /// Authored column-major matrix; when present it replaces the TRS unless
   /// an animation channel targets this node.
   final List<double>? matrix;
+
+  /// Index into [GlintGlbRig.skins] when this node's mesh is skinned.
+  final int? skinIndex;
+}
+
+/// A glTF skin: which nodes are joints, and each joint's inverse bind
+/// matrix (mapping the mesh's bind-pose space into that joint's own local
+/// space).
+class GlintGlbSkin {
+  const GlintGlbSkin({
+    required this.jointNodeIndices,
+    required this.inverseBindMatrices,
+  });
+
+  /// Node indices, in joint order — a vertex's JOINTS_0 values index into
+  /// this list, not directly into the node array.
+  final List<int> jointNodeIndices;
+
+  /// One column-major mat4 per joint, index-aligned with [jointNodeIndices].
+  final List<List<double>> inverseBindMatrices;
 }
 
 /// What a [GlintGlbAnimationChannel] animates on its node.
@@ -115,9 +136,11 @@ class GlintGlbRig {
     required this.rootNodes,
     required this.meshes,
     required this.animations,
+    this.skins = const [],
   });
 
   final List<GlintGlbNode> nodes;
+  final List<GlintGlbSkin> skins;
   final List<int> rootNodes;
 
   /// Local-space geometry, index-aligned with the glTF meshes array.
@@ -218,6 +241,34 @@ class GlintGlbRig {
     return worlds;
   }
 
+  /// Column-major joint matrices for [skinIndex], expressed relative to
+  /// [meshNodeIndex]'s own space — the space a skinned mesh's vertex
+  /// positions are authored in. For each joint: the joint's current-pose
+  /// world transform, combined with its inverse bind matrix (bind pose ->
+  /// joint local space) and the mesh node's own inverse world transform,
+  /// so the result composes correctly with whatever per-instance/per-node
+  /// world transform the caller applies at draw time on top of this.
+  List<List<double>> jointMatrices(
+    int skinIndex,
+    int meshNodeIndex, {
+    int animation = 0,
+    double time = 0,
+  }) {
+    final worlds = nodeWorldTransforms(animation: animation, time: time);
+    final meshWorldInverse = vm.Matrix4.fromList(worlds[meshNodeIndex])
+      ..invert();
+    final skin = skins[skinIndex];
+    return [
+      for (var i = 0; i < skin.jointNodeIndices.length; i++)
+        (meshWorldInverse *
+                    vm.Matrix4.fromList(worlds[skin.jointNodeIndices[i]]) *
+                    vm.Matrix4.fromList(skin.inverseBindMatrices[i])
+                as vm.Matrix4)
+            .storage
+            .toList(),
+    ];
+  }
+
   List<double> _sample(GlintGlbAnimationChannel channel, double time) {
     final times = channel.inputTimes;
     final stride = channel.path == GlintGlbAnimationPath.rotation ? 4 : 3;
@@ -308,6 +359,9 @@ class GlintGlbMesh {
     ],
     required this.boundsMinimum,
     required this.boundsMaximum,
+    this.isSkinned = false,
+    this.joints = const [],
+    this.weights = const [],
   });
 
   final List<double> positions;
@@ -319,6 +373,20 @@ class GlintGlbMesh {
   final List<double> baseColorFactor;
   final double metallicFactor;
   final double roughnessFactor;
+
+  /// Whether any primitive declared JOINTS_0/WEIGHTS_0 — when true, [joints]
+  /// and [weights] hold real per-vertex data; when false they're zero-filled
+  /// and unused (dead data, kept only so the vertex arrays stay index-aligned
+  /// with [positions] uniformly regardless of skin status).
+  final bool isSkinned;
+
+  /// Up to 4 joint indices per vertex (into the mesh's
+  /// [GlintGlbRig.skins]' [GlintGlbSkin.jointNodeIndices], not directly into
+  /// the node array), 4 floats per vertex.
+  final List<double> joints;
+
+  /// Blend weights matching [joints], 4 per vertex.
+  final List<double> weights;
 
   /// Every material the scene's primitives reference; indices in [indices]
   /// are grouped so each [GlintGlbSubmesh] is one contiguous span.
@@ -527,6 +595,29 @@ class _GlbReader {
           matrix: (node['matrix'] as List?)
               ?.map((v) => (v as num).toDouble())
               .toList(),
+          skinIndex: node['skin'] as int?,
+        ),
+      );
+    }
+    final skins = <GlintGlbSkin>[];
+    for (final value in _optionalList(document['skins'])) {
+      final skin = value as Map;
+      final jointNodeIndices = ((skin['joints'] as List?) ?? const [])
+          .cast<int>();
+      final inverseBindMatricesAccessor =
+          skin['inverseBindMatrices'] as int?;
+      final flatMatrices = inverseBindMatricesAccessor == null
+          ? null
+          : _readFloats(inverseBindMatricesAccessor, 'MAT4');
+      skins.add(
+        GlintGlbSkin(
+          jointNodeIndices: jointNodeIndices,
+          inverseBindMatrices: [
+            for (var i = 0; i < jointNodeIndices.length; i++)
+              flatMatrices == null
+                  ? vm.Matrix4.identity().storage.toList()
+                  : flatMatrices.sublist(i * 16, i * 16 + 16),
+          ],
         ),
       );
     }
@@ -600,6 +691,7 @@ class _GlbReader {
           _aggregate([(i, vm.Matrix4.identity())]),
       ],
       animations: animations,
+      skins: skins,
     );
   }
 
@@ -608,11 +700,14 @@ class _GlbReader {
     final positions = <double>[];
     final uvs = <double>[];
     final normals = <double>[];
+    final joints = <double>[];
+    final weights = <double>[];
     // Indices grouped by material (-1 for the glTF default material) so
     // each material becomes one contiguous submesh span.
     final indicesByMaterial = <int, List<int>>{};
     Map? firstPrimitive;
     var uses32BitIndices = false;
+    var isSkinned = false;
     for (final instance in meshInstances) {
       final meshIndex = instance.$1;
       if (meshIndex < 0 || meshIndex >= meshes.length) {
@@ -628,14 +723,16 @@ class _GlbReader {
         firstPrimitive ??= primitive;
         final attributes = primitive['attributes'] as Map;
         final positionAccessor = attributes['POSITION'] as int?;
-        final indexAccessor = primitive['indices'] as int?;
-        if (positionAccessor == null || indexAccessor == null) {
-          throw const FormatException(
-            'Primitive requires POSITION and indices.',
-          );
+        if (positionAccessor == null) {
+          throw const FormatException('Primitive requires POSITION.');
         }
         final localPositions = _readFloats(positionAccessor, 'VEC3');
-        final primitiveIndices = _readIndices(indexAccessor);
+        // glTF allows omitting indices entirely: vertices are then drawn in
+        // sequential order, three at a time, with no index buffer.
+        final indexAccessor = primitive['indices'] as int?;
+        final primitiveIndices = indexAccessor == null
+            ? List<int>.generate(localPositions.length ~/ 3, (i) => i)
+            : _readIndices(indexAccessor);
         final vertexOffset = positions.length ~/ 3;
         final transformedPositions = _transformPositions(
           localPositions,
@@ -657,17 +754,36 @@ class _GlbReader {
         if (transformedNormals.length != transformedPositions.length) {
           throw const FormatException('NORMAL count must match POSITION.');
         }
-        final componentType = _accessor(indexAccessor)['componentType'] as int;
-        if (componentType != 5123 && componentType != 5125) {
-          throw const FormatException(
-            'Indices must be unsigned short or unsigned int.',
-          );
+        final jointsAccessor = attributes['JOINTS_0'] as int?;
+        final primitiveJoints = jointsAccessor == null
+            ? List<double>.filled(vertexCount * 4, 0)
+            : _readJointIndices(jointsAccessor);
+        if (primitiveJoints.length != vertexCount * 4) {
+          throw const FormatException('JOINTS_0 count must match POSITION.');
         }
-        uses32BitIndices =
-            uses32BitIndices || componentType == 5125 || vertexOffset > 65535;
+        final weightsAccessor = attributes['WEIGHTS_0'] as int?;
+        final primitiveWeights = weightsAccessor == null
+            ? List<double>.filled(vertexCount * 4, 0)
+            : _readFloats(weightsAccessor, 'VEC4');
+        if (primitiveWeights.length != vertexCount * 4) {
+          throw const FormatException('WEIGHTS_0 count must match POSITION.');
+        }
+        if (jointsAccessor != null) isSkinned = true;
+        if (indexAccessor != null) {
+          final componentType = _accessor(indexAccessor)['componentType'] as int;
+          if (componentType != 5123 && componentType != 5125) {
+            throw const FormatException(
+              'Indices must be unsigned short or unsigned int.',
+            );
+          }
+          uses32BitIndices = uses32BitIndices || componentType == 5125;
+        }
+        uses32BitIndices = uses32BitIndices || vertexOffset > 65535;
         positions.addAll(transformedPositions);
         uvs.addAll(primitiveUvs);
         normals.addAll(transformedNormals);
+        joints.addAll(primitiveJoints);
+        weights.addAll(primitiveWeights);
         final documentMaterials = _optionalList(document['materials']);
         var materialIndex = primitive['material'] as int? ?? -1;
         if (materialIndex >= documentMaterials.length) materialIndex = -1;
@@ -722,6 +838,9 @@ class _GlbReader {
       worldTransform: vm.Matrix4.identity().storage.toList(),
       boundsMinimum: bounds.$1,
       boundsMaximum: bounds.$2,
+      isSkinned: isSkinned,
+      joints: joints,
+      weights: weights,
     );
   }
 
@@ -963,6 +1082,7 @@ class _GlbReader {
       'VEC2' => 2,
       'VEC3' => 3,
       'VEC4' => 4,
+      'MAT4' => 16,
       _ => throw FormatException('Unsupported accessor type $expectedType.'),
     };
     final view = _view(accessor['bufferView'] as int);
@@ -980,6 +1100,42 @@ class _GlbReader {
             Endian.little,
           ),
         );
+      }
+    }
+    return output;
+  }
+
+  /// Reads an UNSIGNED_BYTE/UNSIGNED_SHORT VEC4 accessor as doubles — glTF's
+  /// JOINTS_0 attribute has integer (not float) components, unlike every
+  /// other attribute this file reads, so it needs its own reader rather
+  /// than reusing [_readFloats]. Values become joint indices into the
+  /// vertex buffer as floats, matching Glint's float-only vertex format.
+  List<double> _readJointIndices(int index) {
+    final accessor = _accessor(index);
+    if (accessor['type'] != 'VEC4') {
+      throw const FormatException('JOINTS_0 accessor must be VEC4.');
+    }
+    final componentType = accessor['componentType'] as int;
+    if (componentType != 5121 && componentType != 5123) {
+      throw const FormatException(
+        'JOINTS_0 must be UNSIGNED_BYTE or UNSIGNED_SHORT.',
+      );
+    }
+    final width = componentType == 5121 ? 1 : 2;
+    final view = _view(accessor['bufferView'] as int);
+    final count = accessor['count'] as int;
+    final start =
+        (view['byteOffset'] as int? ?? 0) +
+        (accessor['byteOffset'] as int? ?? 0);
+    final stride = view['byteStride'] as int? ?? width * 4;
+    final output = <double>[];
+    for (var element = 0; element < count; element++) {
+      for (var component = 0; component < 4; component++) {
+        final byteOffset = start + element * stride + component * width;
+        final value = componentType == 5121
+            ? binary.getUint8(byteOffset)
+            : binary.getUint16(byteOffset, Endian.little);
+        output.add(value.toDouble());
       }
     }
     return output;
