@@ -96,7 +96,7 @@ class _LauncherPage extends StatelessWidget {
               title: 'Skinned character',
               subtitle:
                   'Real vertex-level bone deformation in the game loop — a '
-                  'walking animated fox, not just rigid node motion.',
+                  'skinned fox with interruption-safe clip crossfades.',
               icon: Icons.accessibility_new,
               builder: (_) => const SkinnedCharacterDemoPage(),
             ),

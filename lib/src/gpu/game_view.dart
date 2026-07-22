@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import '../animation.dart';
 import '../assets/environment.dart';
 import '../assets/glb.dart';
 import '../assets/model.dart';
@@ -53,6 +54,7 @@ class GlintGameInstance {
     this.animationIndex = 0,
     this.animationTime = 0,
     this.animationLoop = true,
+    this.animationPose,
     this.pointLights = const [],
     this.spotLights = const [],
   });
@@ -81,6 +83,10 @@ class GlintGameInstance {
   /// Whether sampling wraps after the clip duration. Set false to hold the
   /// final keyframe for one-shot actions.
   final bool animationLoop;
+
+  /// A pose evaluated by [GlintAnimationController]. When supplied, it takes
+  /// precedence over [animationIndex], [animationTime], and [animationLoop].
+  final GlintAnimationPose? animationPose;
 
   /// Point lights in this instance's local space — a muzzle flash on a gun,
   /// a headlight on a car, a torch on a character — transformed by
@@ -517,11 +523,13 @@ class _GlintGameViewState extends State<GlintGameView>
         );
         // Rigged models sample their clip once per instance; static models
         // draw their single part with the instance transform alone.
-        final nodeWorlds = model.rig?.nodeWorldTransforms(
-          animation: instance.animationIndex,
-          time: instance.animationTime,
-          loop: instance.animationLoop,
-        );
+        final nodeWorlds = instance.animationPose == null
+            ? model.rig?.nodeWorldTransforms(
+                animation: instance.animationIndex,
+                time: instance.animationTime,
+                loop: instance.animationLoop,
+              )
+            : model.rig?.nodeWorldTransformsFromPose(instance.animationPose!);
         final material = instance.material;
         final overrideFactor = material?.linearBaseColorFactor;
         for (final (nodeIndex, meshIndex) in model.parts) {
@@ -552,12 +560,10 @@ class _GlintGameViewState extends State<GlintGameView>
           List<List<double>>? jointMatrices;
           if (buffers.isSkinned) {
             final skinIndex = model.rig!.nodes[nodeIndex].skinIndex!;
-            jointMatrices = model.rig!.jointMatrices(
+            jointMatrices = model.rig!.jointMatricesFromWorldTransforms(
               skinIndex,
               nodeIndex,
-              animation: instance.animationIndex,
-              time: instance.animationTime,
-              loop: instance.animationLoop,
+              nodeWorlds!,
             );
           }
           final geometryPipeline = buffers.isSkinned

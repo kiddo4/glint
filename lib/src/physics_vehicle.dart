@@ -104,7 +104,7 @@ class GlintVehicleWheelState {
 /// It is deliberately outside the rigid-body contract: general physics stays
 /// useful for any game, while racers get suspension, tire forces, anti-roll,
 /// gears, aero, boost, surface grip, and per-wheel telemetry.
-class GlintRaycastVehicle {
+class GlintRaycastVehicle implements GlintPhysicsSnapshotParticipant {
   GlintRaycastVehicle({
     required this.world,
     required this.chassis,
@@ -113,19 +113,18 @@ class GlintRaycastVehicle {
   }) : wheelStates = [
          for (final wheel in config.wheels) GlintVehicleWheelState(wheel),
        ] {
-    if (config.wheels.isEmpty) {
-      throw ArgumentError.value(
-        config.wheels,
-        'config.wheels',
-        'cannot be empty',
-      );
-    }
+    _validateConfiguration();
     world.addFixedStepCallback(_fixedUpdate);
+    world.addSnapshotParticipant(this);
   }
 
   final GlintPhysicsWorld world;
   final GlintRigidBody chassis;
   final GlintVehicleConfig config;
+
+  /// Overrides the hit collider's material friction for tire grip. This is a
+  /// convenient hook for wetness, ice, damage, assists, and other runtime
+  /// effects that are not properties of the collider itself.
   final double Function(GlintPhysicsRayHit hit)? surfaceGrip;
   final List<GlintVehicleWheelState> wheelStates;
 
@@ -144,10 +143,87 @@ class GlintRaycastVehicle {
   bool get isGrounded => wheelStates.any((wheel) => wheel.grounded);
   double get speedKilometersPerHour => chassis.linearVelocity.length * 3.6;
 
+  void _validateConfiguration() {
+    if (chassis.type != GlintBodyType.dynamic) {
+      throw ArgumentError.value(
+        chassis.type,
+        'chassis',
+        'a raycast vehicle requires a dynamic rigid body',
+      );
+    }
+    if (config.wheels.isEmpty) {
+      throw ArgumentError.value(
+        config.wheels,
+        'config.wheels',
+        'cannot be empty',
+      );
+    }
+    _finiteVector(config.localForward, 'localForward');
+    _finiteVector(config.localUp, 'localUp');
+    if (config.localForward.length <= 1e-9 ||
+        config.localUp.length <= 1e-9 ||
+        config.localForward.normalized.dot(config.localUp.normalized).abs() >
+            .999) {
+      throw ArgumentError(
+        'localForward and localUp must be non-zero, non-parallel axes.',
+      );
+    }
+    final wheelNames = <String>{};
+    for (final wheel in config.wheels) {
+      if (wheel.name.isEmpty || !wheelNames.add(wheel.name)) {
+        throw ArgumentError.value(
+          wheel.name,
+          'wheel.name',
+          'must be non-empty and unique',
+        );
+      }
+      _finiteVector(wheel.mount, '${wheel.name}.mount');
+      _positive(wheel.radius, '${wheel.name}.radius');
+      _nonNegative(wheel.suspensionLength, '${wheel.name}.suspensionLength');
+      _nonNegative(wheel.springStiffness, '${wheel.name}.springStiffness');
+      _nonNegative(wheel.damping, '${wheel.name}.damping');
+      _nonNegative(wheel.grip, '${wheel.name}.grip');
+    }
+    for (final (name, value) in [
+      ('maxSteerAngle', config.maxSteerAngle),
+      ('steerResponse', config.steerResponse),
+      ('engineForce', config.engineForce),
+      ('serviceBrakeForce', config.serviceBrakeForce),
+      ('handbrakeForce', config.handbrakeForce),
+      ('rollingResistance', config.rollingResistance),
+      ('lateralStiffness', config.lateralStiffness),
+      ('longitudinalStiffness', config.longitudinalStiffness),
+      ('tireFriction', config.tireFriction),
+      ('antiRollStiffness', config.antiRollStiffness),
+      ('aerodynamicDrag', config.aerodynamicDrag),
+      ('downforce', config.downforce),
+      ('boostForce', config.boostForce),
+    ]) {
+      _nonNegative(value, name);
+    }
+    _unitInterval(config.handbrakeGrip, 'handbrakeGrip');
+    for (final value in config.gearRatios) {
+      _positive(value, 'gearRatios');
+    }
+    _positive(config.finalDrive, 'finalDrive');
+    _nonNegative(config.idleRpm, 'idleRpm');
+    _nonNegative(config.shiftDownRpm, 'shiftDownRpm');
+    _positive(config.shiftUpRpm, 'shiftUpRpm');
+    _positive(config.redlineRpm, 'redlineRpm');
+    if (config.idleRpm > config.shiftDownRpm ||
+        config.shiftDownRpm > config.shiftUpRpm ||
+        config.shiftUpRpm > config.redlineRpm) {
+      throw ArgumentError(
+        'idleRpm must be <= shiftDownRpm <= shiftUpRpm <= redlineRpm.',
+      );
+    }
+  }
+
   void _fixedUpdate(double dt) {
     final rotation = chassis.orientation;
     final up = rotation.rotate(config.localUp).normalized;
     final forward = rotation.rotate(config.localForward).normalized;
+    final right = forward.cross(up).normalized;
     final velocity = chassis.linearVelocity;
     forwardSpeed = velocity.dot(forward);
 
@@ -165,13 +241,20 @@ class GlintRaycastVehicle {
     for (final state in wheelStates) {
       final wheel = state.wheel;
       final mount = chassis.position + rotation.rotate(wheel.mount);
+      final steeringRotation = wheel.steered
+          ? GlintQuaternion.axisAngle(up, _steerAngle)
+          : GlintQuaternion.identity;
       final ray = GlintRay(mount, -up);
       final hit = world.raycast(
         ray,
         maxDistance: wheel.suspensionLength + wheel.radius,
         filter: GlintQueryFilter(excludedBodies: {chassis}),
       );
-      state.orientation = rotation;
+      state.orientation =
+          (GlintQuaternion.axisAngle(right, state.spinAngle) *
+                  steeringRotation *
+                  rotation)
+              .normalized;
       axleStates.putIfAbsent(wheel.axle, () => []).add(state);
       if (hit == null) {
         state
@@ -180,7 +263,8 @@ class GlintRaycastVehicle {
           ..suspensionForce = 0
           ..longitudinalSlip = 0
           ..lateralSlip = 0
-          ..center = mount - up * wheel.suspensionLength;
+          ..center = mount - up * wheel.suspensionLength
+          ..contactPoint = mount - up * (wheel.suspensionLength + wheel.radius);
         continue;
       }
 
@@ -190,9 +274,11 @@ class GlintRaycastVehicle {
       );
       final compression = wheel.suspensionLength - suspensionLength;
       final pointVelocity = chassis.velocityAtWorldPoint(hit.position);
+      final surfaceVelocity = hit.body.velocityAtWorldPoint(hit.position);
+      final relativeVelocity = pointVelocity - surfaceVelocity;
       var normalForce =
           wheel.springStiffness * compression -
-          wheel.damping * pointVelocity.dot(up);
+          wheel.damping * relativeVelocity.dot(up);
       normalForce = math.max(0, normalForce);
 
       state
@@ -208,6 +294,12 @@ class GlintRaycastVehicle {
         suspensionDirection * normalForce,
         atWorldPoint: hit.position,
       );
+      if (hit.body.type == GlintBodyType.dynamic) {
+        hit.body.applyForce(
+          suspensionDirection * -normalForce,
+          atWorldPoint: hit.position,
+        );
+      }
 
       var tireForward = forward;
       if (wheel.steered && _steerAngle != 0) {
@@ -219,10 +311,10 @@ class GlintRaycastVehicle {
       tireForward =
           (tireForward - hit.normal * tireForward.dot(hit.normal)).normalized;
       final tireRight = tireForward.cross(hit.normal).normalized;
-      state.orientation = GlintQuaternion.axisAngle(up, _steerAngle) * rotation;
+      state.orientation = (steeringRotation * rotation).normalized;
 
-      final longitudinalVelocity = pointVelocity.dot(tireForward);
-      final lateralVelocity = pointVelocity.dot(tireRight);
+      final longitudinalVelocity = relativeVelocity.dot(tireForward);
+      final lateralVelocity = relativeVelocity.dot(tireRight);
       state
         ..longitudinalSlip = longitudinalVelocity
         ..lateralSlip = lateralVelocity;
@@ -251,7 +343,10 @@ class GlintRaycastVehicle {
           longitudinalVelocity * config.longitudinalStiffness * .02;
       var lateralForce = -lateralVelocity * config.lateralStiffness;
 
-      final roadGrip = surfaceGrip?.call(hit) ?? 1;
+      final roadGrip = math.max(
+        0,
+        surfaceGrip?.call(hit) ?? hit.collider.material.friction,
+      );
       final handbrakeScale = wheel.handbrake
           ? 1 - handbrake.clamp(0.0, 1.0) * (1 - config.handbrakeGrip)
           : 1.0;
@@ -269,11 +364,20 @@ class GlintRaycastVehicle {
         longitudinalForce *= scale;
         lateralForce *= scale;
       }
-      chassis.applyForce(
-        tireForward * longitudinalForce + tireRight * lateralForce,
-        atWorldPoint: hit.position,
-      );
-      state.spinAngle += longitudinalVelocity / wheel.radius * dt;
+      final tireForce =
+          tireForward * longitudinalForce + tireRight * lateralForce;
+      chassis.applyForce(tireForce, atWorldPoint: hit.position);
+      if (hit.body.type == GlintBodyType.dynamic) {
+        hit.body.applyForce(-tireForce, atWorldPoint: hit.position);
+      }
+      state.spinAngle =
+          (state.spinAngle + longitudinalVelocity / wheel.radius * dt) %
+          (math.pi * 2);
+      state.orientation =
+          (GlintQuaternion.axisAngle(tireRight, state.spinAngle) *
+                  steeringRotation *
+                  rotation)
+              .normalized;
     }
 
     for (final axle in axleStates.values) {
@@ -326,9 +430,153 @@ class GlintRaycastVehicle {
     engineRpm = engineRpm.clamp(config.idleRpm, config.redlineRpm);
   }
 
+  @override
+  Object capturePhysicsState() => _GlintVehicleSnapshot(
+    throttle: throttle,
+    brake: brake,
+    steer: steer,
+    handbrake: handbrake,
+    boost: boost,
+    forwardSpeed: forwardSpeed,
+    engineRpm: engineRpm,
+    gear: gear,
+    steerAngle: _steerAngle,
+    wheels: [
+      for (final state in wheelStates)
+        _GlintVehicleWheelSnapshot(
+          grounded: state.grounded,
+          compression: state.compression,
+          suspensionForce: state.suspensionForce,
+          longitudinalSlip: state.longitudinalSlip,
+          lateralSlip: state.lateralSlip,
+          spinAngle: state.spinAngle,
+          center: state.center,
+          contactPoint: state.contactPoint,
+          contactNormal: state.contactNormal,
+          orientation: state.orientation,
+        ),
+    ],
+  );
+
+  @override
+  void restorePhysicsState(Object state) {
+    if (state is! _GlintVehicleSnapshot ||
+        state.wheels.length != wheelStates.length) {
+      throw ArgumentError.value(
+        state,
+        'state',
+        'does not belong to this raycast vehicle',
+      );
+    }
+    throttle = state.throttle;
+    brake = state.brake;
+    steer = state.steer;
+    handbrake = state.handbrake;
+    boost = state.boost;
+    forwardSpeed = state.forwardSpeed;
+    engineRpm = state.engineRpm;
+    gear = state.gear;
+    _steerAngle = state.steerAngle;
+    for (var i = 0; i < wheelStates.length; i++) {
+      final target = wheelStates[i];
+      final source = state.wheels[i];
+      target
+        ..grounded = source.grounded
+        ..compression = source.compression
+        ..suspensionForce = source.suspensionForce
+        ..longitudinalSlip = source.longitudinalSlip
+        ..lateralSlip = source.lateralSlip
+        ..spinAngle = source.spinAngle
+        ..center = source.center
+        ..contactPoint = source.contactPoint
+        ..contactNormal = source.contactNormal
+        ..orientation = source.orientation;
+    }
+  }
+
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     world.removeFixedStepCallback(_fixedUpdate);
+    world.removeSnapshotParticipant(this);
+  }
+}
+
+class _GlintVehicleSnapshot {
+  const _GlintVehicleSnapshot({
+    required this.throttle,
+    required this.brake,
+    required this.steer,
+    required this.handbrake,
+    required this.boost,
+    required this.forwardSpeed,
+    required this.engineRpm,
+    required this.gear,
+    required this.steerAngle,
+    required this.wheels,
+  });
+
+  final double throttle;
+  final double brake;
+  final double steer;
+  final double handbrake;
+  final bool boost;
+  final double forwardSpeed;
+  final double engineRpm;
+  final int gear;
+  final double steerAngle;
+  final List<_GlintVehicleWheelSnapshot> wheels;
+}
+
+class _GlintVehicleWheelSnapshot {
+  const _GlintVehicleWheelSnapshot({
+    required this.grounded,
+    required this.compression,
+    required this.suspensionForce,
+    required this.longitudinalSlip,
+    required this.lateralSlip,
+    required this.spinAngle,
+    required this.center,
+    required this.contactPoint,
+    required this.contactNormal,
+    required this.orientation,
+  });
+
+  final bool grounded;
+  final double compression;
+  final double suspensionForce;
+  final double longitudinalSlip;
+  final double lateralSlip;
+  final double spinAngle;
+  final Vector3 center;
+  final Vector3 contactPoint;
+  final Vector3 contactNormal;
+  final GlintQuaternion orientation;
+}
+
+double _positive(double value, String name) {
+  if (!value.isFinite || value <= 0) {
+    throw ArgumentError.value(value, name, 'must be finite and > 0');
+  }
+  return value;
+}
+
+double _nonNegative(double value, String name) {
+  if (!value.isFinite || value < 0) {
+    throw ArgumentError.value(value, name, 'must be finite and >= 0');
+  }
+  return value;
+}
+
+double _unitInterval(double value, String name) {
+  if (!value.isFinite || value < 0 || value > 1) {
+    throw ArgumentError.value(value, name, 'must be between 0 and 1');
+  }
+  return value;
+}
+
+void _finiteVector(Vector3 value, String name) {
+  if (!value.x.isFinite || !value.y.isFinite || !value.z.isFinite) {
+    throw ArgumentError.value(value, name, 'must contain finite components');
   }
 }

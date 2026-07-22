@@ -38,6 +38,15 @@ flutter test
 
 Both should be clean before opening a PR.
 
+Physics/backend changes also run the native package suite and its repeatable
+stress workload:
+
+```sh
+cd packages/glint_box3d
+flutter test
+flutter test benchmark/physics_stress_test.dart --reporter expanded
+```
+
 ## Editing shaders
 
 `shaders/unlit.vert` and `shaders/unlit.frag` are GLSL source. The engine

@@ -499,6 +499,7 @@ class _Box3dBody extends GlintRigidBody {
     final result = _Box3dCollider(
       this,
       collider,
+      material,
       shapes,
       collisionLayer,
       collisionMask,
@@ -532,6 +533,7 @@ class _Box3dCollider implements GlintColliderHandle {
   _Box3dCollider(
     this.body,
     this.collider,
+    this.material,
     this._shapes,
     this.collisionLayer,
     this.collisionMask,
@@ -543,6 +545,8 @@ class _Box3dCollider implements GlintColliderHandle {
   final _Box3dBody body;
   @override
   final GlintCollider collider;
+  @override
+  final GlintPhysicsMaterial material;
   final List<b3.Box3dShape> _shapes;
   @override
   final int collisionLayer;

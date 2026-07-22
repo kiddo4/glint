@@ -51,19 +51,19 @@ animation, fog, a chase camera, and a Flutter HUD.
 | glTF 2.0 loading | Binary `.glb` from assets or network; scene hierarchy, node transforms, 16/32-bit indices, normals (parsed or generated) |
 | Materials | Per-primitive material batches: base-color textures + factors, metallic, roughness; embedded PNG/JPEG textures (auto-capped at 1K for mobile memory) |
 | Lighting | GGX metallic-roughness PBR, directional/point/spot lights, directional shadows, HDRI image-based lighting (`.hdr` decoder + irradiance/specular prefiltering built in), distance fog |
-| Animation | glTF node and skeletal animation: vertex skinning, LINEAR/STEP/CUBICSPLINE sampling, quaternion slerp, looping or one-shot playback |
-| Physics | Backend-neutral fixed stepping plus an optional Box3D backend: angular rigid bodies, CCD, sleeping, compound/convex/mesh/heightfield colliders, joints, events, ray/overlap/shape queries, filtering, and interpolated render transforms |
-| Vehicle dynamics | Optional raycast vehicle layer with self-excluding wheel rays, spring/damper suspension, load-sensitive tire grip, anti-roll, automatic gears, brakes/handbrake, aero, boost, surface grip hooks, and telemetry |
+| Animation | glTF node and skeletal animation: vertex skinning, LINEAR/STEP/CUBICSPLINE sampling, crossfades, additive/override layers, bone masks, events, state machines, and root motion |
+| Physics | Backend-neutral fixed stepping plus an optional Box3D backend: angular rigid bodies, CCD, sleeping, compound/convex/mesh/heightfield colliders, joints, events, ray/overlap/shape queries, filtering, interpolation, rollback snapshots, and deterministic replay |
+| Vehicle dynamics | Optional raycast vehicle layer with self-excluding wheel rays, spring/damper suspension, material-aware tire grip, dynamic-surface reactions, anti-roll, automatic gears, brakes/handbrake, aero, boost, runtime grip hooks, and telemetry |
 | Interaction | Orbit/pan/zoom gestures, scroll-aware mode for scrollable pages, tap picking via CPU raycasting (Möller–Trumbore) |
 | Widgets in 3D | `Label3D`: project any widget onto a model anchor with fade/hide occlusion policies |
 | Game loop | `GlintGameView`: ticker-driven frames, unlimited model instances with per-node transforms, free look-at camera, translucent blob shadows, frustum culling |
-| Diagnostics | Live FPS / frame time / draw call / triangle overlay; typed, actionable errors for every asset failure |
+| Diagnostics | Live FPS / frame time / draw call / triangle overlay; deterministic physics state digests; repeatable mixed body/contact/query/vehicle stress harness; typed asset errors |
 
-> **Status:** v0.1, feature-complete for the first release and validated at
-> 60 fps with ~160 draw calls per frame on a physical iPhone and on macOS
-> desktop. Like [Flutter GPU](https://github.com/flutter/flutter/blob/main/docs/engine/impeller/Flutter-GPU.md)
-> itself, Glint is early — expect rough edges, and see [Outside v0.1](#outside-v01)
-> for what isn't here yet.
+> **Status:** the published v0.1 line is validated at 60 fps with ~160 draw
+> calls per frame on a physical iPhone and on macOS. The current development
+> line expands Glint into skeletal animation and general 3D physics. Like
+> [Flutter GPU](https://github.com/flutter/flutter/blob/main/docs/engine/impeller/Flutter-GPU.md)
+> itself, Glint is early — expect APIs to keep maturing before 1.0.
 
 ## Getting started
 
@@ -167,7 +167,34 @@ GlintGameView(
 
 The example app ships a complete endless runner (Duck Dash) built this way.
 
-### 6. Add physics
+### 6. Blend character animation
+
+```dart
+final rig = await GlintGlbRig.fromAsset('assets/hero.glb');
+final animation = GlintAnimationController(
+  rig,
+  initialAnimation: 0,
+  events: const [
+    GlintAnimationEvent(animationIndex: 1, time: .24, name: 'footstep'),
+  ],
+);
+
+// Switch clips without popping. Interrupted fades start at the visible pose.
+animation.play(1, fadeDuration: .25);
+
+// Inside GlintGameView.onFrame:
+final animated = animation.update(dt);
+final hero = GlintGameInstance(model: 'hero', animationPose: animated.pose);
+for (final event in animated.events) {
+  if (event.event.name == 'footstep') playFootstep();
+}
+```
+
+`GlintAnimationController` also supports masked override layers, additive
+layers, loop-safe root-motion extraction, reverse playback, and a parameter-
+driven `GlintAnimationStateMachine`.
+
+### 7. Add physics
 
 The engine package defines the portable contract. Choose a backend separately;
 the repository ships `packages/glint_box3d` for production-grade 3D dynamics.
@@ -198,6 +225,54 @@ final instance = GlintGameInstance(
 product interactions, characters, destructible props, triggers, constraints,
 and spatial queries. `GlintRaycastVehicle` is a higher-level consumer of the
 same API and can be omitted entirely.
+
+### 8. Record and verify physics
+
+Snapshots restore rigid bodies, the fixed-step clock, gravity, and registered
+gameplay systems such as `GlintRaycastVehicle`:
+
+```dart
+final checkpoint = physics.captureSnapshot();
+
+// Simulate a risky move, rollback netcode frame, retry, etc.
+physics.restoreSnapshot(checkpoint);
+```
+
+For deterministic replays, record one immutable input per fixed tick. Each
+frame stores a quantized state digest so a regression reports the exact first
+divergent tick instead of merely looking different on screen:
+
+```dart
+final recorder = GlintPhysicsReplayRecorder<CarInput>(
+  world: physics,
+  applyInput: (input, fixedDt) => car.apply(input),
+);
+
+recorder.record(const CarInput(throttle: 1));
+final replay = recorder.finish();
+final result = replay.play(physics, (input, fixedDt) => car.apply(input));
+assert(result.deterministic);
+```
+
+Input tapes can be JSON encoded with an application-provided input codec. The
+in-memory world snapshot is intentionally not serialized; portable playback
+recreates the level normally, then applies the recorded fixed-step inputs.
+
+### 9. Stress a physics backend
+
+`GlintPhysicsStressRunner` builds the same seeded mixed workload on any
+backend: dense box/sphere/capsule/cylinder contacts, impulses, ray/overlap/
+shape queries, and optional raycast vehicles. The Box3D package includes a CI-
+friendly launcher:
+
+```sh
+cd packages/glint_box3d
+flutter test benchmark/physics_stress_test.dart --reporter expanded
+```
+
+Scale it through Dart defines such as `GLINT_STRESS_BODIES`,
+`GLINT_STRESS_VEHICLES`, `GLINT_STRESS_STEPS`, `GLINT_STRESS_QUERIES`, and
+`GLINT_STRESS_MINIMUM_REALTIME`.
 
 ## Examples
 
@@ -249,14 +324,15 @@ Flutter GPU isn't available there yet.
 
 ### Isn't this a reinvention of `flutter_scene`?
 
-Not the same bet. [`flutter_scene`](https://github.com/bdero/flutter_scene)
-is a general-purpose scene graph; Glint is a product-experience engine
-built widget-first: scenes are declarative Flutter state (`Scene3D`,
-restyled with `setState`), Flutter widgets anchor to points on a model with
-real occlusion, gestures cooperate with scrollable pages, and it drives a
-real-time game loop with a Flutter HUD over it. Owning the whole
-pipeline — glTF parser, PBR + IBL shaders, picking, animation — is
-deliberate: every millisecond of the frame is understood, not inherited.
+Not the same architecture. [`flutter_scene`](https://github.com/bdero/flutter_scene)
+is a general-purpose scene graph with its own renderer integrations. Glint is
+Flutter-widget-first: scenes can be declarative Flutter state (`Scene3D`),
+widgets anchor to model points with real occlusion, gestures cooperate with
+scrollable pages, and `GlintGameView` keeps a normal Flutter HUD above the game.
+Glint also owns its glTF, PBR/IBL, animation, picking, diagnostics, and portable
+physics contracts so those systems can evolve as one engine. Compare concrete
+capabilities and platform needs for your project instead of treating either
+package as a drop-in clone of the other.
 
 ### Why do I have to touch platform manifests at all?
 
@@ -281,7 +357,7 @@ above.
 - **Blurry textures on imported assets** — embedded textures are decoded at
   a maximum of 1024px per side to protect mobile memory.
 
-## Outside v0.1
+## Not yet implemented
 
 Morph targets, normal/ORM maps, Draco compression, KTX, custom shaders,
 audio, Web/Windows/Linux rendering. Open an issue if one

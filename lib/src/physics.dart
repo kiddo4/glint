@@ -120,6 +120,10 @@ class GlintRigidBodyConfig {
 abstract interface class GlintColliderHandle {
   GlintRigidBody get body;
   GlintCollider get collider;
+
+  /// The authored material, available to gameplay queries as well as the
+  /// native contact solver (for example, terrain-dependent tire grip).
+  GlintPhysicsMaterial get material;
   bool get isTrigger;
   int get collisionLayer;
   int get collisionMask;
@@ -386,6 +390,78 @@ abstract interface class GlintJoint {
 
 typedef GlintFixedStepCallback = void Function(double fixedTimeStep);
 
+/// A gameplay system whose state participates in physics rollback.
+///
+/// Vehicles, character motors, destructible controllers, and user-defined
+/// simulation systems can register with [GlintPhysicsWorld] so a world
+/// snapshot restores their fixed-step state alongside rigid bodies.
+abstract interface class GlintPhysicsSnapshotParticipant {
+  Object capturePhysicsState();
+  void restorePhysicsState(Object state);
+}
+
+/// One rigid body's backend-neutral rollback state.
+class GlintRigidBodySnapshot {
+  const GlintRigidBodySnapshot({
+    required this.body,
+    required this.type,
+    required this.position,
+    required this.orientation,
+    required this.linearVelocity,
+    required this.angularVelocity,
+    required this.isSleeping,
+  });
+
+  final GlintRigidBody body;
+  final GlintBodyType type;
+  final Vector3 position;
+  final GlintQuaternion orientation;
+  final Vector3 linearVelocity;
+  final Vector3 angularVelocity;
+  final bool isSleeping;
+}
+
+class GlintPhysicsParticipantSnapshot {
+  const GlintPhysicsParticipantSnapshot({
+    required this.participant,
+    required this.state,
+  });
+
+  final GlintPhysicsSnapshotParticipant participant;
+  final Object state;
+}
+
+/// An in-memory rollback point for one [GlintPhysicsWorld].
+///
+/// Snapshots intentionally retain body and participant identities. They are
+/// safe for rewind, retry, replay verification, and rollback netcode within
+/// the same live world. Portable replay files record inputs separately and
+/// recreate the world through application-owned level loading.
+class GlintPhysicsSnapshot {
+  GlintPhysicsSnapshot._({
+    required this._worldIdentity,
+    required this.backendName,
+    required this.simulationStep,
+    required this.accumulator,
+    required this.interpolationAlpha,
+    required this.gravity,
+    required Iterable<GlintRigidBodySnapshot> bodies,
+    required Iterable<GlintPhysicsParticipantSnapshot> participants,
+  }) : bodies = List.unmodifiable(bodies),
+       participants = List.unmodifiable(participants);
+
+  final Object _worldIdentity;
+  final String backendName;
+  final int simulationStep;
+  final double accumulator;
+  final double interpolationAlpha;
+  final Vector3 gravity;
+  final List<GlintRigidBodySnapshot> bodies;
+  final List<GlintPhysicsParticipantSnapshot> participants;
+
+  double simulationTime(double fixedTimeStep) => simulationStep * fixedTimeStep;
+}
+
 /// Backend-neutral, fixed-timestep 3D physics contract.
 abstract class GlintPhysicsWorld {
   GlintPhysicsWorld({
@@ -394,6 +470,21 @@ abstract class GlintPhysicsWorld {
     this.maxSubSteps = 5,
     this.solverSubSteps = 4,
   }) {
+    if (!fixedTimeStep.isFinite || fixedTimeStep <= 0) {
+      throw ArgumentError.value(
+        fixedTimeStep,
+        'fixedTimeStep',
+        'must be finite and > 0',
+      );
+    }
+    if (maxSubSteps <= 0 || solverSubSteps <= 0) {
+      throw ArgumentError(
+        'maxSubSteps and solverSubSteps must both be greater than zero.',
+      );
+    }
+    if (!_finiteVector(gravity)) {
+      throw ArgumentError.value(gravity, 'gravity', 'must be finite');
+    }
     _gravity = gravity;
   }
 
@@ -403,15 +494,23 @@ abstract class GlintPhysicsWorld {
   late Vector3 _gravity;
   double _accumulator = 0;
   double _interpolationAlpha = 0;
+  int _simulationStep = 0;
+  final Object _snapshotIdentity = Object();
   final List<GlintFixedStepCallback> _fixedStepCallbacks = [];
+  final List<GlintPhysicsSnapshotParticipant> _snapshotParticipants = [];
 
   String get backendName;
   List<GlintRigidBody> get bodies;
   Stream<GlintCollisionEvent> get collisions;
   double get interpolationAlpha => _interpolationAlpha;
+  int get simulationStep => _simulationStep;
+  double get simulationTime => _simulationStep * fixedTimeStep;
 
   Vector3 get gravity => _gravity;
   set gravity(Vector3 value) {
+    if (!_finiteVector(value)) {
+      throw ArgumentError.value(value, 'gravity', 'must be finite');
+    }
     _gravity = value;
     updateBackendGravity(value);
   }
@@ -428,6 +527,118 @@ abstract class GlintPhysicsWorld {
   void removeFixedStepCallback(GlintFixedStepCallback callback) =>
       _fixedStepCallbacks.remove(callback);
 
+  void addSnapshotParticipant(GlintPhysicsSnapshotParticipant participant) {
+    if (!_snapshotParticipants.contains(participant)) {
+      _snapshotParticipants.add(participant);
+    }
+  }
+
+  void removeSnapshotParticipant(GlintPhysicsSnapshotParticipant participant) =>
+      _snapshotParticipants.remove(participant);
+
+  /// Captures the fixed-step clock, bodies, and registered gameplay systems.
+  /// Capture between calls to [step] or from a fixed-step callback, not while a
+  /// backend step is executing.
+  GlintPhysicsSnapshot captureSnapshot() => GlintPhysicsSnapshot._(
+    worldIdentity: _snapshotIdentity,
+    backendName: backendName,
+    simulationStep: _simulationStep,
+    accumulator: _accumulator,
+    interpolationAlpha: _interpolationAlpha,
+    gravity: gravity,
+    bodies: [
+      for (final body in bodies)
+        GlintRigidBodySnapshot(
+          body: body,
+          type: body.type,
+          position: body.position,
+          orientation: body.orientation,
+          linearVelocity: body.linearVelocity,
+          angularVelocity: body.angularVelocity,
+          isSleeping: body.isSleeping,
+        ),
+    ],
+    participants: [
+      for (final participant in _snapshotParticipants)
+        GlintPhysicsParticipantSnapshot(
+          participant: participant,
+          state: participant.capturePhysicsState(),
+        ),
+    ],
+  );
+
+  /// Restores a snapshot captured from this world.
+  ///
+  /// With [strict] enabled, body and participant membership must still match;
+  /// this catches accidental spawn/despawn differences during deterministic
+  /// replay instead of silently restoring only part of the simulation.
+  void restoreSnapshot(GlintPhysicsSnapshot snapshot, {bool strict = true}) {
+    if (!identical(snapshot._worldIdentity, _snapshotIdentity)) {
+      throw ArgumentError.value(
+        snapshot,
+        'snapshot',
+        'was captured from a different physics world',
+      );
+    }
+    final currentBodies = bodies;
+    final savedBodies = snapshot.bodies.map((state) => state.body).toSet();
+    final currentParticipants = _snapshotParticipants.toSet();
+    final savedParticipants = snapshot.participants
+        .map((state) => state.participant)
+        .toSet();
+    if (strict &&
+        (currentBodies.length != snapshot.bodies.length ||
+            currentBodies.any((body) => !savedBodies.contains(body)) ||
+            currentParticipants.length != savedParticipants.length ||
+            currentParticipants.any(
+              (participant) => !savedParticipants.contains(participant),
+            ))) {
+      throw StateError(
+        'Physics world membership changed after the snapshot was captured.',
+      );
+    }
+    if (snapshot.bodies.any((state) => !currentBodies.contains(state.body))) {
+      throw StateError('A body captured by the snapshot no longer exists.');
+    }
+    if (snapshot.participants.any(
+      (state) => !_snapshotParticipants.contains(state.participant),
+    )) {
+      throw StateError(
+        'A participant captured by the snapshot is no longer registered.',
+      );
+    }
+
+    gravity = snapshot.gravity;
+    for (final state in snapshot.bodies) {
+      state.body
+        ..type = state.type
+        ..setTransform(state.position, state.orientation)
+        ..linearVelocity = state.linearVelocity
+        ..angularVelocity = state.angularVelocity;
+      if (state.isSleeping) {
+        state.body.putToSleep();
+      } else {
+        state.body.wakeUp();
+      }
+    }
+    for (final state in snapshot.participants) {
+      state.participant.restorePhysicsState(state.state);
+    }
+    _simulationStep = snapshot.simulationStep;
+    _accumulator = snapshot.accumulator;
+    _interpolationAlpha = snapshot.interpolationAlpha;
+    snapshotRestored();
+    updateInterpolation(_interpolationAlpha);
+  }
+
+  /// Advances exactly one simulation tick, bypassing frame-time accumulation.
+  /// This is the preferred driver for deterministic replay and offline tests.
+  void stepFixed() {
+    _runFixedStep();
+    _interpolationAlpha = (_accumulator / fixedTimeStep).clamp(0.0, 1.0);
+    updateInterpolation(_interpolationAlpha);
+  }
+
   int step(double elapsedSeconds) {
     if (!elapsedSeconds.isFinite || elapsedSeconds < 0) {
       throw ArgumentError.value(elapsedSeconds, 'elapsedSeconds');
@@ -435,10 +646,7 @@ abstract class GlintPhysicsWorld {
     _accumulator += math.min(elapsedSeconds, fixedTimeStep * maxSubSteps);
     var count = 0;
     while (_accumulator + 1e-12 >= fixedTimeStep && count < maxSubSteps) {
-      for (final callback in List.of(_fixedStepCallbacks)) {
-        callback(fixedTimeStep);
-      }
-      stepBackend(fixedTimeStep, solverSubSteps);
+      _runFixedStep();
       _accumulator -= fixedTimeStep;
       count++;
     }
@@ -448,6 +656,14 @@ abstract class GlintPhysicsWorld {
     _interpolationAlpha = (_accumulator / fixedTimeStep).clamp(0.0, 1.0);
     updateInterpolation(_interpolationAlpha);
     return count;
+  }
+
+  void _runFixedStep() {
+    for (final callback in List.of(_fixedStepCallbacks)) {
+      callback(fixedTimeStep);
+    }
+    stepBackend(fixedTimeStep, solverSubSteps);
+    _simulationStep++;
   }
 
   GlintPhysicsRayHit? raycast(
@@ -483,5 +699,11 @@ abstract class GlintPhysicsWorld {
   void updateBackendGravity(Vector3 gravity);
   void stepBackend(double fixedTimeStep, int solverSubSteps);
   void updateInterpolation(double alpha);
+
+  /// Backend hook for invalidating interpolation/contact caches after rewind.
+  void snapshotRestored() {}
   void dispose();
 }
+
+bool _finiteVector(Vector3 value) =>
+    value.x.isFinite && value.y.isFinite && value.z.isFinite;

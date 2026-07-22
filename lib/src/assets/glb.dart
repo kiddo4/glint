@@ -137,6 +137,36 @@ class GlintGlbAnimation {
   final double duration;
 }
 
+/// One node's local transform in an evaluated animation pose.
+class GlintAnimationNodePose {
+  const GlintAnimationNodePose({
+    required this.translation,
+    required this.rotation,
+    required this.scale,
+  });
+
+  final Vector3 translation;
+  final GlintQuaternion rotation;
+  final Vector3 scale;
+}
+
+/// A model-local animation pose, with one transform per glTF node.
+///
+/// [trsNodes] records the nodes whose translation/rotation/scale should
+/// replace an authored node matrix. This distinction preserves matrix-authored
+/// bind poses while still allowing animation channels and animation layers to
+/// take control of those nodes.
+class GlintAnimationPose {
+  GlintAnimationPose({
+    required Iterable<GlintAnimationNodePose> nodes,
+    Iterable<int> trsNodes = const [],
+  }) : nodes = List.unmodifiable(nodes),
+       trsNodes = Set.unmodifiable(trsNodes);
+
+  final List<GlintAnimationNodePose> nodes;
+  final Set<int> trsNodes;
+}
+
 /// A glTF scene with its hierarchy and animations preserved: meshes stay in
 /// their local spaces and node transforms are evaluated per frame, which is
 /// what animated rendering needs — unlike [GlintGlbMesh]'s baked aggregate.
@@ -201,23 +231,37 @@ class GlintGlbRig {
     }
   }
 
-  /// Column-major world transforms per node, sampling [animation] at [time]
-  /// (looped over the clip's duration). Pass animation -1 for the bind pose.
-  List<List<double>> nodeWorldTransforms({
+  /// The model's authored local bind pose.
+  GlintAnimationPose bindPose() => GlintAnimationPose(
+    nodes: [
+      for (final node in nodes)
+        GlintAnimationNodePose(
+          translation: Vector3(
+            node.translation[0],
+            node.translation[1],
+            node.translation[2],
+          ),
+          rotation: GlintQuaternion(
+            node.rotationQuaternion[0],
+            node.rotationQuaternion[1],
+            node.rotationQuaternion[2],
+            node.rotationQuaternion[3],
+          ).normalized,
+          scale: Vector3(node.scale[0], node.scale[1], node.scale[2]),
+        ),
+    ],
+  );
+
+  /// Samples one clip into a reusable, model-local pose. Pass animation -1
+  /// for the bind pose. Time wraps for looping clips and clamps for one-shots.
+  GlintAnimationPose sampleAnimation({
     int animation = 0,
     double time = 0,
     bool loop = true,
   }) {
-    final translations = [
-      for (final node in nodes) [...node.translation],
-    ];
-    final rotations = [
-      for (final node in nodes) [...node.rotationQuaternion],
-    ];
-    final scales = [
-      for (final node in nodes) [...node.scale],
-    ];
-    final animated = List<bool>.filled(nodes.length, false);
+    final bind = bindPose();
+    final poses = bind.nodes.toList();
+    final animated = <int>{};
     if (animation >= 0 && animation < animations.length) {
       final clip = animations[animation];
       final localTime = clip.duration <= 0
@@ -226,17 +270,58 @@ class GlintGlbRig {
           ? time % clip.duration
           : time.clamp(0.0, clip.duration).toDouble();
       for (final channel in clip.channels) {
-        animated[channel.nodeIndex] = true;
+        animated.add(channel.nodeIndex);
         final value = _sample(channel, localTime);
+        final current = poses[channel.nodeIndex];
         switch (channel.path) {
           case GlintGlbAnimationPath.translation:
-            translations[channel.nodeIndex] = value;
+            poses[channel.nodeIndex] = GlintAnimationNodePose(
+              translation: Vector3(value[0], value[1], value[2]),
+              rotation: current.rotation,
+              scale: current.scale,
+            );
           case GlintGlbAnimationPath.rotation:
-            rotations[channel.nodeIndex] = value;
+            poses[channel.nodeIndex] = GlintAnimationNodePose(
+              translation: current.translation,
+              rotation: GlintQuaternion(
+                value[0],
+                value[1],
+                value[2],
+                value[3],
+              ).normalized,
+              scale: current.scale,
+            );
           case GlintGlbAnimationPath.scale:
-            scales[channel.nodeIndex] = value;
+            poses[channel.nodeIndex] = GlintAnimationNodePose(
+              translation: current.translation,
+              rotation: current.rotation,
+              scale: Vector3(value[0], value[1], value[2]),
+            );
         }
       }
+    }
+
+    return GlintAnimationPose(nodes: poses, trsNodes: animated);
+  }
+
+  /// Column-major world transforms per node, sampling [animation] at [time]
+  /// (looped over the clip's duration). Pass animation -1 for the bind pose.
+  List<List<double>> nodeWorldTransforms({
+    int animation = 0,
+    double time = 0,
+    bool loop = true,
+  }) => nodeWorldTransformsFromPose(
+    sampleAnimation(animation: animation, time: time, loop: loop),
+  );
+
+  /// Resolves a sampled or mixed local [pose] through the glTF hierarchy.
+  List<List<double>> nodeWorldTransformsFromPose(GlintAnimationPose pose) {
+    if (pose.nodes.length != nodes.length) {
+      throw ArgumentError.value(
+        pose.nodes.length,
+        'pose',
+        'must contain one transform for each of the ${nodes.length} nodes',
+      );
     }
     final worlds = List<List<double>>.filled(nodes.length, const []);
     final visiting = <int>{};
@@ -252,19 +337,24 @@ class GlintGlbRig {
         );
       }
       final node = nodes[index];
+      final nodePose = pose.nodes[index];
       final vm.Matrix4 local;
-      if (node.matrix != null && !animated[index]) {
+      if (node.matrix != null && !pose.trsNodes.contains(index)) {
         local = vm.Matrix4.fromList(node.matrix!);
       } else {
-        final rotation = rotations[index];
         local = vm.Matrix4.compose(
           vm.Vector3(
-            translations[index][0],
-            translations[index][1],
-            translations[index][2],
+            nodePose.translation.x,
+            nodePose.translation.y,
+            nodePose.translation.z,
           ),
-          vm.Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]),
-          vm.Vector3(scales[index][0], scales[index][1], scales[index][2]),
+          vm.Quaternion(
+            nodePose.rotation.x,
+            nodePose.rotation.y,
+            nodePose.rotation.z,
+            nodePose.rotation.w,
+          ),
+          vm.Vector3(nodePose.scale.x, nodePose.scale.y, nodePose.scale.z),
         );
       }
       final world = parent * local as vm.Matrix4;

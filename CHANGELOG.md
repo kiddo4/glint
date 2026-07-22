@@ -6,11 +6,23 @@
   regression coverage with the Fox asset. Batch opaque skinned geometry ahead
   of static geometry to prevent Flutter GPU vertex-layout state leakage.
 * Add glTF CUBICSPLINE animation sampling and optional one-shot playback.
+* Add a full animation runtime with interruption-safe crossfades, additive and
+  override layers, descendant/name bone masks, timeline events, reverse
+  playback, loop-safe root motion, and parameter-driven state machines. Allow
+  `GlintGameInstance` to consume evaluated poses directly and reuse those
+  transforms for skin matrices.
 * Add a backend-neutral full 3D physics contract: quaternion transforms,
   angular dynamics, compound/convex/mesh/heightfield shapes, joints, CCD,
   triggers, events, spatial queries, body exclusion, and interpolation.
 * Add the optional native `glint_box3d` backend and a reusable raycast vehicle
   controller with suspension, tire grip, anti-roll, gears, aero, and boost.
+  Expose collider materials to queries, validate vehicle configurations, use
+  relative contact velocity, apply equal forces to dynamic driving surfaces,
+  and provide correctly steered/spinning wheel poses.
+* Add backend-neutral in-memory rollback snapshots covering the simulation
+  clock, bodies, gravity, and registered gameplay systems. Add fixed-tick input
+  recording, portable JSON replay tapes, quantized state digests with exact
+  divergence reporting, and a seeded body/contact/query/vehicle stress runner.
 * Add skinned-character and arcade-physics showcase pages.
 
 ## 0.1.2
