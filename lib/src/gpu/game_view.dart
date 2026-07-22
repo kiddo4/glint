@@ -45,6 +45,8 @@ class GlintGameInstance {
     this.translucent = false,
     this.animationIndex = 0,
     this.animationTime = 0,
+    this.pointLights = const [],
+    this.spotLights = const [],
   });
 
   /// Key into [GlintGameView.models].
@@ -67,6 +69,18 @@ class GlintGameInstance {
   /// Seconds into the clip; it loops over the clip duration automatically,
   /// so passing a running game clock plays the animation continuously.
   final double animationTime;
+
+  /// Point lights in this instance's local space — a muzzle flash on a gun,
+  /// a headlight on a car, a torch on a character — transformed by
+  /// [transform] into world space every frame, so they track the instance
+  /// automatically instead of requiring their position to be recomputed by
+  /// hand. Combined with every other instance's and [GlintGameView]'s own
+  /// [GlintGameView.pointLights]/[GlintGameView.spotLights], capped at
+  /// [kMaxPunctualLights] total.
+  final List<PointLight> pointLights;
+
+  /// As [pointLights], for cone-narrowed lights.
+  final List<SpotLight> spotLights;
 }
 
 /// Everything the renderer needs to draw one game frame.
@@ -363,9 +377,55 @@ class _GlintGameViewState extends State<GlintGameView>
       // once here and the resulting buffer view is rebound (not
       // re-emplaced) before every draw call below — the same pattern
       // already used for the frame-constant irradiance/radiance textures.
+      //
+      // Instance-attached lights are local-space, so they're resolved to
+      // world space here — once per instance, reusing _worldScratch, which
+      // is safe because every value is copied out into a new PointLight/
+      // SpotLight before the draw loop below reuses the same scratch matrix.
+      final combinedPointLights = widget.pointLights.toList();
+      final combinedSpotLights = widget.spotLights.toList();
+      for (final instance in frame.instances) {
+        if (instance.pointLights.isEmpty && instance.spotLights.isEmpty) {
+          continue;
+        }
+        final instanceWorld = _composeTransform(
+          instance.transform,
+          _worldScratch,
+        );
+        for (final light in instance.pointLights) {
+          combinedPointLights.add(worldPointLight(light, instanceWorld));
+        }
+        for (final light in instance.spotLights) {
+          combinedSpotLights.add(worldSpotLight(light, instanceWorld));
+        }
+      }
+      // Over budget: keep the lights nearest the camera rather than
+      // whichever happened to be first in instance order — a scrolling
+      // game routinely has more lights alive (coins, muzzle flashes) than
+      // the budget, and the ones worth keeping are the visible/near ones.
+      if (combinedPointLights.length + combinedSpotLights.length >
+          kMaxPunctualLights) {
+        double distanceSquaredToCamera(Vector3 position) {
+          final dx = position.x - camera.position.x;
+          final dy = position.y - camera.position.y;
+          final dz = position.z - camera.position.z;
+          return dx * dx + dy * dy + dz * dz;
+        }
+
+        combinedPointLights.sort(
+          (a, b) => distanceSquaredToCamera(
+            a.position,
+          ).compareTo(distanceSquaredToCamera(b.position)),
+        );
+        combinedSpotLights.sort(
+          (a, b) => distanceSquaredToCamera(
+            a.position,
+          ).compareTo(distanceSquaredToCamera(b.position)),
+        );
+      }
       final punctualLights = GlintPackedPunctualLights(
-        widget.pointLights,
-        widget.spotLights,
+        combinedPointLights,
+        combinedSpotLights,
       );
       final frameInfo = hostBuffer.emplace(
         _floats([

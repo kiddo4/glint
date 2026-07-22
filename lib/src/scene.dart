@@ -66,9 +66,12 @@ class EnvironmentLight extends Light3D {
 /// The GPU renderers carry punctual lights (point + spot) in a fixed-size
 /// uniform array. Scenes declaring more than this many combined get the
 /// first [kMaxPunctualLights] in list order; the rest are dropped (with a
-/// debug-mode warning). Keep this in sync with `MAX_PUNCTUAL_LIGHTS` in
-/// `shaders/unlit.frag`.
-const kMaxPunctualLights = 4;
+/// debug-mode warning). 8 leaves headroom for game scenes with several
+/// short-lived lights alive at once — muzzle flashes, impacts — without the
+/// per-fragment cost of an unbounded loop; revisit if profiling on
+/// mid-range hardware says otherwise. Keep this in sync with
+/// `MAX_PUNCTUAL_LIGHTS` in `shaders/unlit.frag`.
+const kMaxPunctualLights = 8;
 
 /// A light that radiates in all directions from a world-space point,
 /// falling off with distance. Field names follow glTF's `KHR_lights_punctual`

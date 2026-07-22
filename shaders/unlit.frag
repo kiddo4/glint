@@ -1,4 +1,4 @@
-#define MAX_PUNCTUAL_LIGHTS 4
+#define MAX_PUNCTUAL_LIGHTS 8
 
 uniform sampler2D tex;
 uniform sampler2D irradiance_map;

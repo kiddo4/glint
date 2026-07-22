@@ -203,6 +203,18 @@ class _DuckDashScreenState extends State<DuckDashScreen> {
                 rotation: Vector3(0, _sim.runTime * 4 + entity.z * .2, 0),
                 scale: const Vector3(24, 24, 24),
               ),
+              // An instance-attached light: this glow is in the coin's own
+              // local space, so it bobs and spins with it every frame
+              // without any extra bookkeeping — the same mechanism a
+              // muzzle flash or headlight would use in any other game.
+              pointLights: const [
+                PointLight(
+                  position: Vector3.zero,
+                  color: Color(0xffffd166),
+                  intensity: 2.5,
+                  range: 4,
+                ),
+              ],
             ),
           );
       }

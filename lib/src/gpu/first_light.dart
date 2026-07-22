@@ -455,6 +455,9 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         format: context.defaultDepthStencilFormat,
       );
       final commandBuffer = context.createCommandBuffer();
+      final hostBuffer = context.createHostBuffer();
+      final model = _modelMatrix();
+
       final target = gpu.RenderTarget.singleColor(
         gpu.ColorAttachment(
           texture: texture,
@@ -480,7 +483,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       pass.setWindingOrder(gpu.WindingOrder.counterClockwise);
       pass.setCullMode(gpu.CullMode.backFace);
 
-      final hostBuffer = context.createHostBuffer();
       pass.bindVertexBuffer(
         gpu.BufferView(
           prepared.vertexBuffer,
@@ -498,7 +500,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         prepared.indexType,
         mesh.indices.length,
       );
-      final model = _modelMatrix();
       final mvp = _modelViewProjection();
       final material = widget.material;
       pass.bindUniform(
