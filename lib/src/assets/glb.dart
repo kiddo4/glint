@@ -88,6 +88,9 @@ class GlintGlbSkin {
 /// What a [GlintGlbAnimationChannel] animates on its node.
 enum GlintGlbAnimationPath { translation, rotation, scale }
 
+/// How values between two glTF animation keyframes are sampled.
+enum GlintGlbInterpolation { linear, step, cubicSpline }
+
 /// Keyframes driving one property of one node.
 class GlintGlbAnimationChannel {
   const GlintGlbAnimationChannel({
@@ -95,8 +98,11 @@ class GlintGlbAnimationChannel {
     required this.path,
     required this.inputTimes,
     required this.output,
-    this.stepInterpolation = false,
-  });
+    GlintGlbInterpolation interpolation = GlintGlbInterpolation.linear,
+    bool stepInterpolation = false,
+  }) : interpolation = stepInterpolation
+           ? GlintGlbInterpolation.step
+           : interpolation;
 
   final int nodeIndex;
   final GlintGlbAnimationPath path;
@@ -105,11 +111,15 @@ class GlintGlbAnimationChannel {
   final List<double> inputTimes;
 
   /// Keyframe values, 3 components per key (4 for rotation, x y z w).
+  /// CUBICSPLINE channels store an in-tangent, value, and out-tangent for
+  /// each key, as prescribed by glTF 2.0.
   final List<double> output;
 
-  /// STEP holds each key; otherwise keys interpolate linearly
-  /// (rotations via shortest-path slerp).
-  final bool stepInterpolation;
+  final GlintGlbInterpolation interpolation;
+
+  /// Compatibility shorthand for callers written before interpolation was
+  /// exposed as an enum.
+  bool get stepInterpolation => interpolation == GlintGlbInterpolation.step;
 }
 
 /// One named animation clip.
@@ -172,9 +182,20 @@ class GlintGlbRig {
   /// Whether [bytes] declare any animation clips, without reading geometry.
   static bool probeAnimations(ByteData bytes) {
     try {
-      final animations =
-          GlintGlbMesh._containerReader(bytes).document['animations'];
+      final animations = GlintGlbMesh._containerReader(
+        bytes,
+      ).document['animations'];
       return animations is List && animations.isNotEmpty;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Whether [bytes] declare one or more skins, without reading geometry.
+  static bool probeSkins(ByteData bytes) {
+    try {
+      final skins = GlintGlbMesh._containerReader(bytes).document['skins'];
+      return skins is List && skins.isNotEmpty;
     } on Object {
       return false;
     }
@@ -182,16 +203,28 @@ class GlintGlbRig {
 
   /// Column-major world transforms per node, sampling [animation] at [time]
   /// (looped over the clip's duration). Pass animation -1 for the bind pose.
-  List<List<double>> nodeWorldTransforms({int animation = 0, double time = 0}) {
-    final translations = [for (final node in nodes) [...node.translation]];
+  List<List<double>> nodeWorldTransforms({
+    int animation = 0,
+    double time = 0,
+    bool loop = true,
+  }) {
+    final translations = [
+      for (final node in nodes) [...node.translation],
+    ];
     final rotations = [
       for (final node in nodes) [...node.rotationQuaternion],
     ];
-    final scales = [for (final node in nodes) [...node.scale]];
+    final scales = [
+      for (final node in nodes) [...node.scale],
+    ];
     final animated = List<bool>.filled(nodes.length, false);
     if (animation >= 0 && animation < animations.length) {
       final clip = animations[animation];
-      final localTime = clip.duration > 0 ? time % clip.duration : 0.0;
+      final localTime = clip.duration <= 0
+          ? 0.0
+          : loop
+          ? time % clip.duration
+          : time.clamp(0.0, clip.duration).toDouble();
       for (final channel in clip.channels) {
         animated[channel.nodeIndex] = true;
         final value = _sample(channel, localTime);
@@ -206,7 +239,18 @@ class GlintGlbRig {
       }
     }
     final worlds = List<List<double>>.filled(nodes.length, const []);
+    final visiting = <int>{};
+    final visited = <int>{};
     void visit(int index, vm.Matrix4 parent) {
+      if (index < 0 || index >= nodes.length) {
+        throw StateError('glTF node index $index is out of range.');
+      }
+      if (visited.contains(index)) return;
+      if (!visiting.add(index)) {
+        throw StateError(
+          'glTF node hierarchy contains a cycle at node $index.',
+        );
+      }
       final node = nodes[index];
       final vm.Matrix4 local;
       if (node.matrix != null && !animated[index]) {
@@ -228,6 +272,8 @@ class GlintGlbRig {
       for (final child in node.children) {
         visit(child, world);
       }
+      visiting.remove(index);
+      visited.add(index);
     }
 
     for (final root in rootNodes) {
@@ -253,10 +299,43 @@ class GlintGlbRig {
     int meshNodeIndex, {
     int animation = 0,
     double time = 0,
+    bool loop = true,
   }) {
-    final worlds = nodeWorldTransforms(animation: animation, time: time);
-    final meshWorldInverse = vm.Matrix4.fromList(worlds[meshNodeIndex])
-      ..invert();
+    final worlds = nodeWorldTransforms(
+      animation: animation,
+      time: time,
+      loop: loop,
+    );
+    return jointMatricesFromWorldTransforms(skinIndex, meshNodeIndex, worlds);
+  }
+
+  /// Computes skin matrices from transforms already sampled for this frame.
+  /// Renderers can use this to avoid evaluating the same animation twice.
+  List<List<double>> jointMatricesFromWorldTransforms(
+    int skinIndex,
+    int meshNodeIndex,
+    List<List<double>> worlds,
+  ) {
+    if (skinIndex < 0 || skinIndex >= skins.length) {
+      throw RangeError.index(skinIndex, skins, 'skinIndex');
+    }
+    if (meshNodeIndex < 0 || meshNodeIndex >= nodes.length) {
+      throw RangeError.index(meshNodeIndex, nodes, 'meshNodeIndex');
+    }
+    if (worlds.length != nodes.length ||
+        worlds.any((matrix) => matrix.length != 16)) {
+      throw ArgumentError.value(
+        worlds.length,
+        'worlds',
+        'must contain one mat4 per node',
+      );
+    }
+    final meshWorldInverse = vm.Matrix4.fromList(worlds[meshNodeIndex]);
+    final determinant = meshWorldInverse.invert();
+    if (determinant == 0 ||
+        meshWorldInverse.storage.any((value) => !value.isFinite)) {
+      throw StateError('Skinned mesh node $meshNodeIndex is not invertible.');
+    }
     final skin = skins[skinIndex];
     return [
       for (var i = 0; i < skin.jointNodeIndices.length; i++)
@@ -272,8 +351,12 @@ class GlintGlbRig {
   List<double> _sample(GlintGlbAnimationChannel channel, double time) {
     final times = channel.inputTimes;
     final stride = channel.path == GlintGlbAnimationPath.rotation ? 4 : 3;
+    final cubic = channel.interpolation == GlintGlbInterpolation.cubicSpline;
     List<double> key(int index) => [
-      for (var c = 0; c < stride; c++) channel.output[index * stride + c],
+      for (var c = 0; c < stride; c++)
+        channel.output[index * stride * (cubic ? 3 : 1) +
+            (cubic ? stride : 0) +
+            c],
     ];
     if (times.isEmpty) return List.filled(stride, 0);
     if (time <= times.first) return key(0);
@@ -283,11 +366,33 @@ class GlintGlbRig {
       next++;
     }
     final previous = next - 1;
-    if (channel.stepInterpolation) return key(previous);
+    if (channel.interpolation == GlintGlbInterpolation.step) {
+      return key(previous);
+    }
     final span = times[next] - times[previous];
     final t = span <= 0 ? 0.0 : (time - times[previous]) / span;
     final a = key(previous);
     final b = key(next);
+    if (cubic) {
+      final t2 = t * t;
+      final t3 = t2 * t;
+      final h00 = 2 * t3 - 3 * t2 + 1;
+      final h10 = t3 - 2 * t2 + t;
+      final h01 = -2 * t3 + 3 * t2;
+      final h11 = t3 - t2;
+      final previousBase = previous * stride * 3;
+      final nextBase = next * stride * 3;
+      final value = [
+        for (var c = 0; c < stride; c++)
+          h00 * a[c] +
+              h10 * span * channel.output[previousBase + stride * 2 + c] +
+              h01 * b[c] +
+              h11 * span * channel.output[nextBase + c],
+      ];
+      return channel.path == GlintGlbAnimationPath.rotation
+          ? _normalizeQuaternion(value)
+          : value;
+    }
     if (channel.path != GlintGlbAnimationPath.rotation) {
       return [for (var c = 0; c < stride; c++) a[c] + (b[c] - a[c]) * t];
     }
@@ -320,8 +425,14 @@ class GlintGlbRig {
     final y = a[1] * weightA + by * weightB;
     final z = a[2] * weightA + bz * weightB;
     final w = a[3] * weightA + bw * weightB;
-    final length = math.sqrt(x * x + y * y + z * z + w * w);
-    return length == 0 ? const [0, 0, 0, 1] : [x / length, y / length, z / length, w / length];
+    return _normalizeQuaternion([x, y, z, w]);
+  }
+
+  List<double> _normalizeQuaternion(List<double> value) {
+    final length = math.sqrt(value.fold(0.0, (sum, v) => sum + v * v));
+    return length == 0
+        ? const [0, 0, 0, 1]
+        : [for (final component in value) component / length];
   }
 }
 
@@ -438,7 +549,8 @@ class GlintGlbMesh {
     final distance = delta.length;
     if (distance == 0) return false;
     final hit = intersectRay(GlintRay(origin, delta * (1 / distance)));
-    return hit != null && hit.distance < distance - (tolerance ?? distance * .01);
+    return hit != null &&
+        hit.distance < distance - (tolerance ?? distance * .01);
   }
 
   Vector3 _position(int index) => Vector3(
@@ -579,6 +691,10 @@ class _GlbReader {
     final nodes = <GlintGlbNode>[];
     for (final value in documentNodes) {
       final node = value as Map;
+      final meshIndex = node['mesh'] as int?;
+      if (meshIndex != null && (meshIndex < 0 || meshIndex >= meshCount)) {
+        throw const FormatException('Node mesh index is out of range.');
+      }
       final rotation = (node['rotation'] as List?) ?? const [0, 0, 0, 1];
       final translation = (node['translation'] as List?) ?? const [0, 0, 0];
       final scale = (node['scale'] as List?) ?? const [1, 1, 1];
@@ -586,11 +702,9 @@ class _GlbReader {
         GlintGlbNode(
           name: node['name'] as String?,
           children: ((node['children'] as List?) ?? const []).cast<int>(),
-          meshIndex: node['mesh'] as int?,
+          meshIndex: meshIndex,
           translation: [for (final v in translation) (v as num).toDouble()],
-          rotationQuaternion: [
-            for (final v in rotation) (v as num).toDouble(),
-          ],
+          rotationQuaternion: [for (final v in rotation) (v as num).toDouble()],
           scale: [for (final v in scale) (v as num).toDouble()],
           matrix: (node['matrix'] as List?)
               ?.map((v) => (v as num).toDouble())
@@ -604,11 +718,22 @@ class _GlbReader {
       final skin = value as Map;
       final jointNodeIndices = ((skin['joints'] as List?) ?? const [])
           .cast<int>();
-      final inverseBindMatricesAccessor =
-          skin['inverseBindMatrices'] as int?;
+      if (jointNodeIndices.isEmpty) {
+        throw const FormatException('A skin must declare at least one joint.');
+      }
+      if (jointNodeIndices.any((index) => index < 0 || index >= nodes.length)) {
+        throw const FormatException('Skin joint index is out of range.');
+      }
+      final inverseBindMatricesAccessor = skin['inverseBindMatrices'] as int?;
       final flatMatrices = inverseBindMatricesAccessor == null
           ? null
           : _readFloats(inverseBindMatricesAccessor, 'MAT4');
+      if (flatMatrices != null &&
+          flatMatrices.length != jointNodeIndices.length * 16) {
+        throw const FormatException(
+          'Inverse bind matrix count must match the skin joint count.',
+        );
+      }
       skins.add(
         GlintGlbSkin(
           jointNodeIndices: jointNodeIndices,
@@ -621,12 +746,35 @@ class _GlbReader {
         ),
       );
     }
+    for (final node in nodes) {
+      final skinIndex = node.skinIndex;
+      if (skinIndex != null && (skinIndex < 0 || skinIndex >= skins.length)) {
+        throw const FormatException('Node skin index is out of range.');
+      }
+    }
     final scenes = _optionalList(document['scenes']);
     final activeScene = (document['scene'] as int?) ?? 0;
+    if (scenes.isNotEmpty &&
+        (activeScene < 0 || activeScene >= scenes.length)) {
+      throw const FormatException('Active scene index is out of range.');
+    }
+    final childNodes = {
+      for (final node in nodes)
+        for (final child in node.children) child,
+    };
+    if (childNodes.any((index) => index < 0 || index >= nodes.length)) {
+      throw const FormatException('Child node index is out of range.');
+    }
     final rootNodes = scenes.isEmpty
-        ? [for (var i = 0; i < nodes.length; i++) i]
+        ? [
+            for (var i = 0; i < nodes.length; i++)
+              if (!childNodes.contains(i)) i,
+          ]
         : ((scenes[activeScene] as Map)['nodes'] as List? ?? const [])
               .cast<int>();
+    if (rootNodes.any((index) => index < 0 || index >= nodes.length)) {
+      throw const FormatException('Root node index is out of range.');
+    }
     final animations = <GlintGlbAnimation>[];
     var clipIndex = 0;
     for (final value in _optionalList(document['animations'])) {
@@ -648,19 +796,49 @@ class _GlbReader {
           _ => null, // weights (morph targets) are outside v0.1.
         };
         if (nodeIndex == null || path == null) continue;
-        final sampler = samplers[channel['sampler'] as int] as Map;
-        final interpolation =
-            sampler['interpolation'] as String? ?? 'LINEAR';
-        if (interpolation == 'CUBICSPLINE') {
+        if (nodeIndex < 0 || nodeIndex >= nodes.length) {
           throw const FormatException(
-            'CUBICSPLINE animation interpolation is not supported yet.',
+            'Animation target node index is out of range.',
           );
         }
+        final samplerIndex = channel['sampler'] as int;
+        if (samplerIndex < 0 || samplerIndex >= samplers.length) {
+          throw const FormatException(
+            'Animation sampler index is out of range.',
+          );
+        }
+        final sampler = samplers[samplerIndex] as Map;
+        final interpolation = switch (sampler['interpolation'] as String? ??
+            'LINEAR') {
+          'LINEAR' => GlintGlbInterpolation.linear,
+          'STEP' => GlintGlbInterpolation.step,
+          'CUBICSPLINE' => GlintGlbInterpolation.cubicSpline,
+          final value => throw FormatException(
+            'Unsupported animation interpolation $value.',
+          ),
+        };
         final inputTimes = _readFloats(sampler['input'] as int, 'SCALAR');
         final output = _readFloats(
           sampler['output'] as int,
           path == GlintGlbAnimationPath.rotation ? 'VEC4' : 'VEC3',
         );
+        for (var i = 1; i < inputTimes.length; i++) {
+          if (inputTimes[i] <= inputTimes[i - 1]) {
+            throw const FormatException(
+              'Animation keyframe times must be strictly increasing.',
+            );
+          }
+        }
+        final components = path == GlintGlbAnimationPath.rotation ? 4 : 3;
+        final expectedOutputLength =
+            inputTimes.length *
+            components *
+            (interpolation == GlintGlbInterpolation.cubicSpline ? 3 : 1);
+        if (output.length != expectedOutputLength) {
+          throw const FormatException(
+            'Animation output count does not match its input keyframes.',
+          );
+        }
         if (inputTimes.isNotEmpty && inputTimes.last > duration) {
           duration = inputTimes.last;
         }
@@ -670,7 +848,7 @@ class _GlbReader {
             path: path,
             inputTimes: inputTimes,
             output: output,
-            stepInterpolation: interpolation == 'STEP',
+            interpolation: interpolation,
           ),
         );
       }
@@ -755,22 +933,28 @@ class _GlbReader {
           throw const FormatException('NORMAL count must match POSITION.');
         }
         final jointsAccessor = attributes['JOINTS_0'] as int?;
+        final weightsAccessor = attributes['WEIGHTS_0'] as int?;
+        if ((jointsAccessor == null) != (weightsAccessor == null)) {
+          throw const FormatException(
+            'JOINTS_0 and WEIGHTS_0 must be declared together.',
+          );
+        }
         final primitiveJoints = jointsAccessor == null
             ? List<double>.filled(vertexCount * 4, 0)
             : _readJointIndices(jointsAccessor);
         if (primitiveJoints.length != vertexCount * 4) {
           throw const FormatException('JOINTS_0 count must match POSITION.');
         }
-        final weightsAccessor = attributes['WEIGHTS_0'] as int?;
         final primitiveWeights = weightsAccessor == null
             ? List<double>.filled(vertexCount * 4, 0)
-            : _readFloats(weightsAccessor, 'VEC4');
+            : _readWeights(weightsAccessor);
         if (primitiveWeights.length != vertexCount * 4) {
           throw const FormatException('WEIGHTS_0 count must match POSITION.');
         }
         if (jointsAccessor != null) isSkinned = true;
         if (indexAccessor != null) {
-          final componentType = _accessor(indexAccessor)['componentType'] as int;
+          final componentType =
+              _accessor(indexAccessor)['componentType'] as int;
           if (componentType != 5123 && componentType != 5125) {
             throw const FormatException(
               'Indices must be unsigned short or unsigned int.',
@@ -796,6 +980,20 @@ class _GlbReader {
       throw const FormatException(
         'Active scene contains no supported TRIANGLES primitives.',
       );
+    }
+    // If one primitive in a mesh is skinned, the whole mesh uses the skinned
+    // vertex pipeline. Give primitives without explicit influences a stable
+    // identity-like fallback instead of letting a zero matrix collapse them.
+    if (isSkinned) {
+      for (var vertex = 0; vertex < positions.length ~/ 3; vertex++) {
+        final base = vertex * 4;
+        final total =
+            weights[base] +
+            weights[base + 1] +
+            weights[base + 2] +
+            weights[base + 3];
+        if (total == 0) weights[base] = 1;
+      }
     }
     final materials = [
       for (final material in _optionalList(document['materials']))
@@ -1101,6 +1299,59 @@ class _GlbReader {
           ),
         );
       }
+    }
+    return output;
+  }
+
+  /// Reads glTF skin weights. Besides FLOAT, the format permits normalized
+  /// UNSIGNED_BYTE and UNSIGNED_SHORT values, which are common in compact
+  /// mobile assets. Values are normalized again per vertex to avoid drift
+  /// from quantization or imperfect exporters.
+  List<double> _readWeights(int index) {
+    final accessor = _accessor(index);
+    if (accessor['type'] != 'VEC4') {
+      throw const FormatException('WEIGHTS_0 accessor must be VEC4.');
+    }
+    final componentType = accessor['componentType'] as int;
+    final width = switch (componentType) {
+      5121 => 1,
+      5123 => 2,
+      5126 => 4,
+      _ => throw const FormatException(
+        'WEIGHTS_0 must contain FLOAT or normalized unsigned integer values.',
+      ),
+    };
+    if (componentType != 5126 && accessor['normalized'] != true) {
+      throw const FormatException(
+        'Integer WEIGHTS_0 accessors must be normalized.',
+      );
+    }
+    final view = _view(accessor['bufferView'] as int);
+    final count = accessor['count'] as int;
+    final start =
+        (view['byteOffset'] as int? ?? 0) +
+        (accessor['byteOffset'] as int? ?? 0);
+    final stride = view['byteStride'] as int? ?? width * 4;
+    final output = List<double>.filled(count * 4, 0);
+    for (var element = 0; element < count; element++) {
+      for (var component = 0; component < 4; component++) {
+        final byteOffset = start + element * stride + component * width;
+        final value = switch (componentType) {
+          5121 => binary.getUint8(byteOffset) / 255,
+          5123 => binary.getUint16(byteOffset, Endian.little) / 65535,
+          _ => binary.getFloat32(byteOffset, Endian.little),
+        };
+        if (!value.isFinite || value < 0) {
+          throw const FormatException(
+            'WEIGHTS_0 values must be finite and non-negative.',
+          );
+        }
+        output[element * 4 + component] = value;
+      }
+      // Preserve authored FLOAT weights byte-for-byte. Normalized integer
+      // accessors still need conversion to 0..1, but a second normalization
+      // of FLOAT data can perturb assets that were already validated by the
+      // exporter and was implicated in a GPU skinning regression.
     }
     return output;
   }

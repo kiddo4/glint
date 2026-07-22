@@ -1,0 +1,17 @@
+name: glint_box3d
+description: High-performance Box3D physics backend for Glint Engine.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.1
+
+dependencies:
+  box3d: ^0.1.0
+  glint_engine:
+    path: ../..
+  vector_math: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

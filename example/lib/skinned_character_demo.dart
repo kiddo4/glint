@@ -40,16 +40,14 @@ class _SkinnedCharacterDemoPageState extends State<SkinnedCharacterDemoPage> {
         fieldOfViewDegrees: 45,
       ),
       instances: [
-        // DIAGNOSTIC: ground temporarily hidden to isolate the fox's shape
-        // unambiguously from the mangled-mesh screenshot.
-        // const GlintGameInstance(
-        //   model: 'ground',
-        //   transform: Transform3D(
-        //     position: Vector3(0, -1, 0),
-        //     scale: Vector3(150, 1, 150),
-        //   ),
-        //   material: _groundMaterial,
-        // ),
+        const GlintGameInstance(
+          model: 'ground',
+          transform: Transform3D(
+            position: Vector3(0, -1, 0),
+            scale: Vector3(150, 1, 150),
+          ),
+          material: _groundMaterial,
+        ),
         GlintGameInstance(
           model: 'fox',
           animationIndex: 1,

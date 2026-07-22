@@ -1,5 +1,7 @@
 // Glint's public API.
 export 'src/math.dart';
+export 'src/physics.dart';
+export 'src/physics_vehicle.dart';
 export 'src/assets/texture_pixels.dart';
 export 'src/assets/environment.dart';
 export 'src/assets/hdr.dart';

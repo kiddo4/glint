@@ -73,4 +73,45 @@ void main() {
     expect(GlintGlbRig.probeAnimations(animated!), isTrue);
     expect(GlintGlbRig.probeAnimations(static_!), isFalse);
   });
+
+  testWidgets('skin probing finds a rig independently of geometry parsing', (
+    tester,
+  ) async {
+    final bytes = await tester.runAsync(
+      () => const Model.asset(
+        'packages/glint_engine/assets/models/simple_skin.glb',
+      ).read(),
+    );
+    expect(GlintGlbRig.probeSkins(bytes!), isTrue);
+  });
+
+  test('CUBICSPLINE channels use Hermite tangents', () {
+    const rig = GlintGlbRig(
+      nodes: [GlintGlbNode()],
+      rootNodes: [0],
+      meshes: [],
+      animations: [
+        GlintGlbAnimation(
+          name: 'ease',
+          duration: 1,
+          channels: [
+            GlintGlbAnimationChannel(
+              nodeIndex: 0,
+              path: GlintGlbAnimationPath.translation,
+              inputTimes: [0, 1],
+              // Each key is in-tangent, value, out-tangent.
+              output: [0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+              interpolation: GlintGlbInterpolation.cubicSpline,
+            ),
+          ],
+        ),
+      ],
+    );
+    final halfway = rig.nodeWorldTransforms(time: .5, loop: false);
+    expect(halfway.single[12], closeTo(.75, 1e-9));
+    final held = rig.nodeWorldTransforms(time: 2, loop: false);
+    expect(held.single[12], closeTo(1, 1e-9));
+    final looped = rig.nodeWorldTransforms(time: 1);
+    expect(looped.single[12], closeTo(0, 1e-9));
+  });
 }

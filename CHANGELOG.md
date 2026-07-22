@@ -1,3 +1,18 @@
+## Unreleased
+
+* Complete skeletal skinning handoff: render static skins through their rig,
+  validate joint limits and indices, accept normalized integer weights, avoid
+  bind-pose culling errors, preserve authored float weights, and add live GPU
+  regression coverage with the Fox asset. Batch opaque skinned geometry ahead
+  of static geometry to prevent Flutter GPU vertex-layout state leakage.
+* Add glTF CUBICSPLINE animation sampling and optional one-shot playback.
+* Add a backend-neutral full 3D physics contract: quaternion transforms,
+  angular dynamics, compound/convex/mesh/heightfield shapes, joints, CCD,
+  triggers, events, spatial queries, body exclusion, and interpolation.
+* Add the optional native `glint_box3d` backend and a reusable raycast vehicle
+  controller with suspension, tire grip, anti-roll, gears, aero, and boost.
+* Add skinned-character and arcade-physics showcase pages.
+
 ## 0.1.2
 
 * Explicitly declare supported platforms (iOS, macOS, Android) in

@@ -1,12 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:glint_box3d/glint_box3d.dart';
 
 import 'configurator.dart';
 import 'duck_dash.dart';
 import 'labels_demo.dart';
+import 'physics_demo.dart';
 import 'skinned_character_demo.dart';
 import 'viewer.dart';
 
-void main() => runApp(const GlintShowcase());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await GlintBox3dWorld.ensureInitialized();
+  runApp(const GlintShowcase());
+}
 
 /// Launcher for the Glint demos: each entry is a self-contained example of
 /// one slice of the engine.
@@ -23,7 +29,7 @@ class GlintShowcase extends StatelessWidget {
         brightness: Brightness.dark,
       ),
     ),
-    home: const SkinnedCharacterDemoPage(),
+    home: const _LauncherPage(),
   );
 }
 
@@ -93,6 +99,14 @@ class _LauncherPage extends StatelessWidget {
                   'walking animated fox, not just rigid node motion.',
               icon: Icons.accessibility_new,
               builder: (_) => const SkinnedCharacterDemoPage(),
+            ),
+            _DemoCard(
+              title: 'Arcade physics lab',
+              subtitle:
+                  'Full 3D rigid-body physics driving an arcade car: angular '
+                  'motion, suspension, grip, gears, boost, and self-filtered rays.',
+              icon: Icons.sports_motorsports,
+              builder: (_) => const PhysicsDemoPage(),
             ),
           ],
         ),

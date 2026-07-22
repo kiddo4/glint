@@ -16,6 +16,7 @@ class Vector3 {
   Vector3 operator -(Vector3 other) =>
       Vector3(x - other.x, y - other.y, z - other.z);
   Vector3 operator *(double value) => Vector3(x * value, y * value, z * value);
+  Vector3 operator -() => Vector3(-x, -y, -z);
 
   double dot(Vector3 other) => x * other.x + y * other.y + z * other.z;
   Vector3 cross(Vector3 other) => Vector3(
@@ -32,6 +33,111 @@ class Vector3 {
 
   @override
   int get hashCode => Object.hash(x, y, z);
+
+  @override
+  String toString() => 'Vector3($x, $y, $z)';
+}
+
+/// An immutable unit quaternion used for simulation-safe 3D orientation.
+class GlintQuaternion {
+  const GlintQuaternion(this.x, this.y, this.z, this.w);
+
+  static const identity = GlintQuaternion(0, 0, 0, 1);
+
+  factory GlintQuaternion.axisAngle(Vector3 axis, double radians) {
+    final unit = axis.normalized;
+    final half = radians * .5;
+    final sine = math.sin(half);
+    return GlintQuaternion(
+      unit.x * sine,
+      unit.y * sine,
+      unit.z * sine,
+      math.cos(half),
+    ).normalized;
+  }
+
+  /// Matches [Transform3D]'s historic X, then Y, then Z Euler order.
+  factory GlintQuaternion.fromEuler(Vector3 radians) {
+    final qx = GlintQuaternion.axisAngle(const Vector3(1, 0, 0), radians.x);
+    final qy = GlintQuaternion.axisAngle(const Vector3(0, 1, 0), radians.y);
+    final qz = GlintQuaternion.axisAngle(const Vector3(0, 0, 1), radians.z);
+    return (qz * qy * qx).normalized;
+  }
+
+  final double x;
+  final double y;
+  final double z;
+  final double w;
+
+  GlintQuaternion operator *(GlintQuaternion other) => GlintQuaternion(
+    w * other.x + x * other.w + y * other.z - z * other.y,
+    w * other.y - x * other.z + y * other.w + z * other.x,
+    w * other.z + x * other.y - y * other.x + z * other.w,
+    w * other.w - x * other.x - y * other.y - z * other.z,
+  );
+
+  GlintQuaternion get normalized {
+    final magnitude = math.sqrt(x * x + y * y + z * z + w * w);
+    return magnitude == 0
+        ? identity
+        : GlintQuaternion(
+            x / magnitude,
+            y / magnitude,
+            z / magnitude,
+            w / magnitude,
+          );
+  }
+
+  GlintQuaternion get conjugate => GlintQuaternion(-x, -y, -z, w);
+
+  Vector3 rotate(Vector3 value) {
+    final vector = Vector3(x, y, z);
+    final uv = vector.cross(value);
+    final uuv = vector.cross(uv);
+    return value + uv * (2 * w) + uuv * 2;
+  }
+
+  static GlintQuaternion slerp(
+    GlintQuaternion from,
+    GlintQuaternion to,
+    double t,
+  ) {
+    var target = to;
+    var cosine = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
+    if (cosine < 0) {
+      cosine = -cosine;
+      target = GlintQuaternion(-to.x, -to.y, -to.z, -to.w);
+    }
+    if (cosine > .9995) {
+      return GlintQuaternion(
+        from.x + (target.x - from.x) * t,
+        from.y + (target.y - from.y) * t,
+        from.z + (target.z - from.z) * t,
+        from.w + (target.w - from.w) * t,
+      ).normalized;
+    }
+    final angle = math.acos(cosine.clamp(-1.0, 1.0));
+    final sine = math.sin(angle);
+    final a = math.sin((1 - t) * angle) / sine;
+    final b = math.sin(t * angle) / sine;
+    return GlintQuaternion(
+      from.x * a + target.x * b,
+      from.y * a + target.y * b,
+      from.z * a + target.z * b,
+      from.w * a + target.w * b,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is GlintQuaternion &&
+      x == other.x &&
+      y == other.y &&
+      z == other.z &&
+      w == other.w;
+
+  @override
+  int get hashCode => Object.hash(x, y, z, w);
 }
 
 /// A picking ray with an [origin] and a normalized [direction].
@@ -170,7 +276,8 @@ class GlintFrustumPlane {
   final double c;
   final double d;
 
-  double distanceTo(Vector3 point) => a * point.x + b * point.y + c * point.z + d;
+  double distanceTo(Vector3 point) =>
+      a * point.x + b * point.y + c * point.z + d;
 }
 
 /// The six clip planes of a projection·view·model matrix, expressed in the
@@ -223,11 +330,15 @@ class Transform3D {
   const Transform3D({
     this.position = Vector3.zero,
     this.rotation = Vector3.zero,
+    this.orientation,
     this.scale = Vector3.one,
   });
 
   final Vector3 position;
   final Vector3 rotation;
+
+  /// Quaternion orientation. When present it takes precedence over [rotation].
+  final GlintQuaternion? orientation;
   final Vector3 scale;
 
   Vector3 apply(Vector3 point) {
@@ -236,6 +347,8 @@ class Transform3D {
       point.y * scale.y,
       point.z * scale.z,
     );
+    final quaternion = orientation;
+    if (quaternion != null) return quaternion.rotate(value) + position;
     final cx = math.cos(rotation.x), sx = math.sin(rotation.x);
     value = Vector3(
       value.x,

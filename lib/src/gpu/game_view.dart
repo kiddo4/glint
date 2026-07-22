@@ -52,6 +52,7 @@ class GlintGameInstance {
     this.translucent = false,
     this.animationIndex = 0,
     this.animationTime = 0,
+    this.animationLoop = true,
     this.pointLights = const [],
     this.spotLights = const [],
   });
@@ -76,6 +77,10 @@ class GlintGameInstance {
   /// Seconds into the clip; it loops over the clip duration automatically,
   /// so passing a running game clock plays the animation continuously.
   final double animationTime;
+
+  /// Whether sampling wraps after the clip duration. Set false to hold the
+  /// final keyframe for one-shot actions.
+  final bool animationLoop;
 
   /// Point lights in this instance's local space — a muzzle flash on a gun,
   /// a headlight on a car, a torch on a character — transformed by
@@ -486,6 +491,11 @@ class _GlintGameViewState extends State<GlintGameView>
       gpu.RenderPipeline? currentPipeline = pipeline;
       void useGeometryPipeline(gpu.RenderPipeline target) {
         if (identical(currentPipeline, target)) return;
+        // Flutter GPU retains vertex/uniform bindings across pipeline
+        // changes. The static and skinned pipelines have different vertex
+        // strides and vertex-uniform layouts, so carrying those bindings
+        // across corrupts the first draw after a switch.
+        pass.clearBindings();
         pass.bindPipeline(target);
         // Depth-write and blend state are phase-scoped (opaque vs.
         // translucent, set around the two draw loops below), not
@@ -510,6 +520,7 @@ class _GlintGameViewState extends State<GlintGameView>
         final nodeWorlds = model.rig?.nodeWorldTransforms(
           animation: instance.animationIndex,
           time: instance.animationTime,
+          loop: instance.animationLoop,
         );
         final material = instance.material;
         final overrideFactor = material?.linearBaseColorFactor;
@@ -523,12 +534,16 @@ class _GlintGameViewState extends State<GlintGameView>
               ..setFrom(instanceWorld)
               ..multiply(vm.Matrix4.fromList(nodeWorlds[nodeIndex]));
           }
-          if (!_worldBoundsVisible(
-            frustum,
-            world,
-            buffers.boundsMinimum,
-            buffers.boundsMaximum,
-          )) {
+          // Bind-pose bounds are not conservative for animated skinning.
+          // Keep skinned parts until dynamic bounds are available rather than
+          // incorrectly popping limbs or whole characters out of view.
+          if (!buffers.isSkinned &&
+              !_worldBoundsVisible(
+                frustum,
+                world,
+                buffers.boundsMinimum,
+                buffers.boundsMaximum,
+              )) {
             continue;
           }
           _mvpScratch.setFrom(viewProjection);
@@ -542,18 +557,13 @@ class _GlintGameViewState extends State<GlintGameView>
               nodeIndex,
               animation: instance.animationIndex,
               time: instance.animationTime,
+              loop: instance.animationLoop,
             );
-            if (jointMatrices.length > kMaxJointsPerSkin) {
-              assert(() {
-                debugPrint(
-                  'Glint: skin has ${jointMatrices!.length} joints, only '
-                  '$kMaxJointsPerSkin render.',
-                );
-                return true;
-              }());
-            }
           }
-          useGeometryPipeline(buffers.isSkinned ? skinnedPipeline : pipeline);
+          final geometryPipeline = buffers.isSkinned
+              ? skinnedPipeline
+              : pipeline;
+          useGeometryPipeline(geometryPipeline);
 
           pass.bindVertexBuffer(
             gpu.BufferView(
@@ -599,9 +609,7 @@ class _GlintGameViewState extends State<GlintGameView>
                 }
               }
               pass.bindUniform(
-                skinnedPipeline.vertexShader.getUniformSlot(
-                  'SkinnedDrawInfo',
-                ),
+                skinnedPipeline.vertexShader.getUniformSlot('SkinnedDrawInfo'),
                 hostBuffer.emplace(_skinnedDrawScratch.buffer.asByteData()),
               );
             } else {
@@ -613,21 +621,20 @@ class _GlintGameViewState extends State<GlintGameView>
                 _drawScratch[32 + i] = factor[i];
               }
               _drawScratch[36] = material?.metallic ?? submesh.metallicFactor;
-              _drawScratch[37] =
-                  material?.roughness ?? submesh.roughnessFactor;
+              _drawScratch[37] = material?.roughness ?? submesh.roughnessFactor;
               pass.bindUniform(
                 pipeline.vertexShader.getUniformSlot('DrawInfo'),
                 hostBuffer.emplace(_drawScratch.buffer.asByteData()),
               );
             }
             pass.bindUniform(
-              pipeline.fragmentShader.getUniformSlot('FrameInfo'),
+              geometryPipeline.fragmentShader.getUniformSlot('FrameInfo'),
               frameInfo,
             );
             drawCalls++;
             triangles += submesh.indexCount ~/ 3;
             pass.bindTexture(
-              pipeline.fragmentShader.getUniformSlot('tex'),
+              geometryPipeline.fragmentShader.getUniformSlot('tex'),
               submesh.texture,
               sampler: gpu.SamplerOptions(
                 minFilter: gpu.MinMagFilter.linear,
@@ -637,12 +644,12 @@ class _GlintGameViewState extends State<GlintGameView>
               ),
             );
             pass.bindTexture(
-              pipeline.fragmentShader.getUniformSlot('irradiance_map'),
+              geometryPipeline.fragmentShader.getUniformSlot('irradiance_map'),
               assets.irradianceTexture,
               sampler: environmentSampler,
             );
             pass.bindTexture(
-              pipeline.fragmentShader.getUniformSlot('radiance_map'),
+              geometryPipeline.fragmentShader.getUniformSlot('radiance_map'),
               assets.radianceTexture,
               sampler: environmentSampler,
             );
@@ -654,8 +661,24 @@ class _GlintGameViewState extends State<GlintGameView>
       // Opaque geometry first with depth writes, then translucent instances
       // (blob shadows, glass) blended over it without disturbing the depth
       // buffer.
+      bool usesSkinnedPipeline(GlintGameInstance instance) {
+        final model = assets.models[instance.model];
+        return model != null && model.meshes.any((mesh) => mesh.isSkinned);
+      }
+
+      // Flutter GPU currently corrupts the wider skinned vertex layout when
+      // a static draw has already executed in the same pass. Opaque ordering
+      // is depth-independent, so batch skinned geometry first and reduce the
+      // frame to one safe skinned -> static transition.
       for (final instance in frame.instances) {
-        if (!instance.translucent) draw(instance);
+        if (!instance.translucent && usesSkinnedPipeline(instance)) {
+          draw(instance);
+        }
+      }
+      for (final instance in frame.instances) {
+        if (!instance.translucent && !usesSkinnedPipeline(instance)) {
+          draw(instance);
+        }
       }
       if (frame.instances.any((instance) => instance.translucent)) {
         pass.setDepthWriteEnable(false);
@@ -679,11 +702,7 @@ class _GlintGameViewState extends State<GlintGameView>
         },
       );
       await completer.future;
-      _recordStats(
-        stopwatch.elapsedMicroseconds / 1000,
-        drawCalls,
-        triangles,
-      );
+      _recordStats(stopwatch.elapsedMicroseconds / 1000, drawCalls, triangles);
       return texture.asImage();
     } catch (error) {
       debugPrint('Glint game render failed: $error');
@@ -698,6 +717,24 @@ class _GlintGameViewState extends State<GlintGameView>
   /// World matrix matching [Transform3D.apply]: scale, then X/Y/Z rotation,
   /// then translation. Composes into [target] to avoid per-draw allocation.
   vm.Matrix4 _composeTransform(Transform3D transform, vm.Matrix4 target) {
+    final orientation = transform.orientation;
+    if (orientation != null) {
+      target.setFromTranslationRotationScale(
+        vm.Vector3(
+          transform.position.x,
+          transform.position.y,
+          transform.position.z,
+        ),
+        vm.Quaternion(
+          orientation.x,
+          orientation.y,
+          orientation.z,
+          orientation.w,
+        ),
+        vm.Vector3(transform.scale.x, transform.scale.y, transform.scale.z),
+      );
+      return target;
+    }
     target
       ..setIdentity()
       ..translateByDouble(
@@ -1004,14 +1041,10 @@ class _MeshBuffers {
 
 /// A model resident on the GPU in its authored units — game transforms are
 /// authoritative, so no centering or normalization is applied. Models with
-/// animation clips keep their node hierarchy as parts; static models
-/// collapse to one baked part.
+/// animation clips or skins keep their node hierarchy as parts; plain static
+/// models collapse to one baked part.
 class _GameModel {
-  const _GameModel({
-    required this.meshes,
-    required this.parts,
-    this.rig,
-  });
+  const _GameModel({required this.meshes, required this.parts, this.rig});
 
   final List<_MeshBuffers> meshes;
 
@@ -1029,8 +1062,9 @@ class _GameModel {
       enableRenderTargetUsage: false,
     )..overwrite(ByteData(4)..setUint32(0, 0xffffffff));
     final bytes = await source.read();
-    if (GlintGlbRig.probeAnimations(bytes)) {
+    if (GlintGlbRig.probeAnimations(bytes) || GlintGlbRig.probeSkins(bytes)) {
       final rig = GlintGlbRig.parse(bytes, debugLabel: source.debugLabel);
+      _validateRigForRenderer(rig, source.debugLabel);
       return _GameModel(
         meshes: [
           for (final mesh in rig.meshes)
@@ -1038,8 +1072,7 @@ class _GameModel {
         ],
         parts: [
           for (var i = 0; i < rig.nodes.length; i++)
-            if (rig.nodes[i].meshIndex != null)
-              (i, rig.nodes[i].meshIndex!),
+            if (rig.nodes[i].meshIndex != null) (i, rig.nodes[i].meshIndex!),
         ],
         rig: rig,
       );
@@ -1049,5 +1082,38 @@ class _GameModel {
       meshes: [await _MeshBuffers.build(mesh, context, whiteTexture)],
       parts: const [(-1, 0)],
     );
+  }
+
+  static void _validateRigForRenderer(GlintGlbRig rig, String debugLabel) {
+    for (var nodeIndex = 0; nodeIndex < rig.nodes.length; nodeIndex++) {
+      final node = rig.nodes[nodeIndex];
+      final meshIndex = node.meshIndex;
+      if (meshIndex == null || !rig.meshes[meshIndex].isSkinned) continue;
+      final skinIndex = node.skinIndex;
+      if (skinIndex == null || skinIndex < 0 || skinIndex >= rig.skins.length) {
+        throw GlintGlbException(
+          debugLabel,
+          'Skinned mesh node $nodeIndex does not reference a valid skin',
+        );
+      }
+      final skin = rig.skins[skinIndex];
+      if (skin.jointNodeIndices.length > kMaxJointsPerSkin) {
+        throw GlintGlbException(
+          debugLabel,
+          'Skin $skinIndex has ${skin.jointNodeIndices.length} joints; '
+          'the renderer supports at most $kMaxJointsPerSkin',
+        );
+      }
+      for (final joint in rig.meshes[meshIndex].joints) {
+        if (joint < 0 ||
+            joint != joint.truncateToDouble() ||
+            joint >= skin.jointNodeIndices.length) {
+          throw GlintGlbException(
+            debugLabel,
+            'Mesh $meshIndex references joint $joint outside skin $skinIndex',
+          );
+        }
+      }
+    }
   }
 }
