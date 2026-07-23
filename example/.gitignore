@@ -30,7 +30,10 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+/build/*
+!/build/shaderbundles/
+/build/shaderbundles/*
+!/build/shaderbundles/glint_materials.shaderbundle
 /coverage/
 
 # Symbolication related

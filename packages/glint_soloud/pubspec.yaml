@@ -1,0 +1,31 @@
+name: glint_soloud
+description: Low-latency spatial SoLoud audio backend for Glint Engine.
+version: 0.1.0
+homepage: https://glint.kiddobuild.dev
+repository: https://github.com/kiddo4/glint/tree/main/packages/glint_soloud
+topics:
+  - audio
+  - spatial-audio
+  - game-engine
+  - soloud
+  - flutter
+
+platforms:
+  ios:
+  macos:
+  android:
+
+environment:
+  sdk: ^3.12.1
+  flutter: ">=3.44.1"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_soloud: ^4.0.13
+  glint_engine: ^0.2.0
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter

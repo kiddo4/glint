@@ -14,7 +14,9 @@ import '../assets/glb.dart';
 import '../assets/model.dart';
 import '../assets/texture_pixels.dart';
 import '../math.dart';
+import '../particles.dart';
 import '../scene.dart';
+import '../shader_graph.dart';
 import 'punctual_lights.dart';
 import 'render_stats.dart';
 
@@ -24,6 +26,25 @@ import 'render_stats.dart';
 /// known. A skin with more joints than this has the rest silently dropped,
 /// with a debug-mode warning.
 const kMaxJointsPerSkin = 64;
+
+const _disabledShadowMatrix = <double>[
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+];
 
 /// A free camera for game rendering: position and target in world units.
 class GlintGameCamera {
@@ -50,6 +71,7 @@ class GlintGameInstance {
     required this.model,
     this.transform = const Transform3D(),
     this.material,
+    this.shaderMaterial,
     this.translucent = false,
     this.animationIndex = 0,
     this.animationTime = 0,
@@ -67,6 +89,11 @@ class GlintGameInstance {
 
   /// Overrides the model's authored material for this instance only.
   final Material3D? material;
+
+  /// Optional build-time shader graph material. It keeps the authored base
+  /// material and texture available to the graph while replacing the standard
+  /// fragment stage for this instance.
+  final GlintShaderGraphMaterial? shaderMaterial;
 
   /// Alpha-blends over opaque geometry without writing depth; drawn last.
   /// Use for blob shadows and other soft decals.
@@ -103,10 +130,17 @@ class GlintGameInstance {
 
 /// Everything the renderer needs to draw one game frame.
 class GlintGameFrame {
-  const GlintGameFrame({required this.camera, required this.instances});
+  const GlintGameFrame({
+    required this.camera,
+    required this.instances,
+    this.particles = const [],
+  });
 
   final GlintGameCamera camera;
   final List<GlintGameInstance> instances;
+
+  /// Billboard batches produced by [GlintParticleSystem.renderBatch].
+  final List<GlintParticleRenderBatch> particles;
 }
 
 /// A ticker-driven viewport that renders many model instances per frame with
@@ -118,6 +152,9 @@ class GlintGameView extends StatefulWidget {
     super.key,
     required this.models,
     required this.onFrame,
+    this.particleTextures = const {},
+    this.shaderTextures = const {},
+    this.textureDecoder = const GlintTextureDecoder(),
     this.environmentAsset,
     this.width = 1024,
     this.height = 1024,
@@ -136,6 +173,17 @@ class GlintGameView extends StatefulWidget {
 
   /// The models this game draws, keyed by the names frames reference.
   final Map<String, Model> models;
+
+  /// Reusable texture sources keyed by particle configs. A particle system
+  /// with no texture uses a white texel, which is useful for procedural color
+  /// gradients and debugging.
+  final Map<String, GlintTextureSource> particleTextures;
+
+  /// Texture sources referenced by [GlintShaderGraphMaterial.textures].
+  final Map<String, GlintTextureSource> shaderTextures;
+
+  /// Shared PNG/JPEG/KTX2/Basis decoding policy for model and particle assets.
+  final GlintTextureDecoder textureDecoder;
 
   /// Advances the simulation by the elapsed seconds and describes the frame.
   final GlintGameFrame Function(double secondsElapsed) onFrame;
@@ -184,6 +232,8 @@ class _GlintGameViewState extends State<GlintGameView>
   Duration _lastTick = Duration.zero;
   gpu.RenderPipeline? _pipeline;
   gpu.RenderPipeline? _skinnedPipeline;
+  gpu.RenderPipeline? _particlePipeline;
+  final Map<(String, String, bool), gpu.RenderPipeline> _graphPipelines = {};
   bool _rendering = false;
   bool _failed = false;
 
@@ -204,6 +254,9 @@ class _GlintGameViewState extends State<GlintGameView>
   final _partWorldScratch = vm.Matrix4.zero();
   final _mvpScratch = vm.Matrix4.zero();
   final _cornerScratch = vm.Vector3.zero();
+  Float32List _particleVertexScratch = Float32List(0);
+  final List<int> _particleOrderScratch = [];
+  double _shaderTime = 0;
 
   @override
   void initState() {
@@ -218,6 +271,8 @@ class _GlintGameViewState extends State<GlintGameView>
     super.reassemble();
     _pipeline = null;
     _skinnedPipeline = null;
+    _particlePipeline = null;
+    _graphPipelines.clear();
     _failed = false;
   }
 
@@ -225,7 +280,10 @@ class _GlintGameViewState extends State<GlintGameView>
   void didUpdateWidget(GlintGameView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.models != widget.models ||
-        oldWidget.environmentAsset != widget.environmentAsset) {
+        oldWidget.environmentAsset != widget.environmentAsset ||
+        oldWidget.particleTextures != widget.particleTextures ||
+        oldWidget.shaderTextures != widget.shaderTextures ||
+        oldWidget.textureDecoder != widget.textureDecoder) {
       _assets = _loadAssets()..ignore();
       _failed = false;
     }
@@ -246,6 +304,7 @@ class _GlintGameViewState extends State<GlintGameView>
     if (_rendering || _failed || !mounted) return;
     // Clamp pathological gaps (paused app) so physics never explodes.
     final frame = widget.onFrame(seconds.clamp(0, 1 / 15));
+    _shaderTime += seconds.clamp(0, 1 / 15);
     _rendering = true;
     final next = _render(frame);
     setState(() {
@@ -268,7 +327,10 @@ class _GlintGameViewState extends State<GlintGameView>
         : await GlintEnvironment.fromAsset(widget.environmentAsset!);
     final models = <String, _GameModel>{};
     for (final entry in widget.models.entries) {
-      models[entry.key] = await _GameModel.load(entry.value);
+      models[entry.key] = await _GameModel.load(
+        entry.value,
+        widget.textureDecoder,
+      );
     }
     final context = gpu.gpuContext;
     gpu.Texture upload(ByteData bytes, int width, int height) {
@@ -284,8 +346,41 @@ class _GlintGameViewState extends State<GlintGameView>
     }
 
     final blackTexel = ByteData(4);
+    final whiteTexel = ByteData(4)..setUint32(0, 0xffffffff);
+    final whiteTexture = upload(whiteTexel, 1, 1);
+    final particleTextures = <String, gpu.Texture>{};
+    for (final entry in widget.particleTextures.entries) {
+      final encoded = await entry.value.read();
+      final pixels = await widget.textureDecoder.decode(
+        encoded,
+        debugLabel: entry.value.debugLabel,
+        maximumDimension: 2048,
+      );
+      particleTextures[entry.key] = upload(
+        pixels.bytes,
+        pixels.width,
+        pixels.height,
+      );
+    }
+    final shaderTextures = <String, gpu.Texture>{};
+    for (final entry in widget.shaderTextures.entries) {
+      final encoded = await entry.value.read();
+      final pixels = await widget.textureDecoder.decode(
+        encoded,
+        debugLabel: entry.value.debugLabel,
+        maximumDimension: 2048,
+      );
+      shaderTextures[entry.key] = upload(
+        pixels.bytes,
+        pixels.width,
+        pixels.height,
+      );
+    }
     return _GameAssets(
       models: models,
+      whiteTexture: whiteTexture,
+      particleTextures: particleTextures,
+      shaderTextures: shaderTextures,
       irradianceTexture: environment == null
           ? upload(blackTexel, 1, 1)
           : upload(
@@ -336,6 +431,52 @@ class _GlintGameViewState extends State<GlintGameView>
       throw StateError('Glint skinned shader entry points are missing.');
     }
     return _skinnedPipeline = context.createRenderPipeline(vertex, fragment);
+  }
+
+  gpu.RenderPipeline _obtainParticlePipeline(gpu.GpuContext context) {
+    final cached = _particlePipeline;
+    if (cached != null) return cached;
+    final library = gpu.ShaderLibrary.fromAsset(
+      'packages/glint_engine/shaders/glint.shaderbundle',
+    );
+    if (library == null) {
+      throw StateError('Glint shader bundle could not be loaded.');
+    }
+    final vertex = library['ParticleVertex'];
+    final fragment = library['ParticleFragment'];
+    if (vertex == null || fragment == null) {
+      throw StateError('Glint particle shader entry points are missing.');
+    }
+    return _particlePipeline = context.createRenderPipeline(vertex, fragment);
+  }
+
+  gpu.RenderPipeline _obtainGraphPipeline(
+    gpu.GpuContext context,
+    GlintShaderGraphMaterial material, {
+    required bool skinned,
+  }) {
+    final key = (material.bundleAsset, material.fragmentEntry, skinned);
+    final cached = _graphPipelines[key];
+    if (cached != null) return cached;
+    final graphLibrary = gpu.ShaderLibrary.fromAsset(material.bundleAsset);
+    if (graphLibrary == null) {
+      throw StateError(
+        'Shader graph bundle "${material.bundleAsset}" could not be loaded.',
+      );
+    }
+    final fragment = graphLibrary[material.fragmentEntry];
+    if (fragment == null) {
+      throw StateError(
+        'Shader graph fragment "${material.fragmentEntry}" is missing.',
+      );
+    }
+    final vertex = skinned
+        ? _obtainSkinnedPipeline(context).vertexShader
+        : _obtainPipeline(context).vertexShader;
+    return _graphPipelines[key] = context.createRenderPipeline(
+      vertex,
+      fragment,
+    );
   }
 
   Future<ui.Image> _render(GlintGameFrame frame) async {
@@ -485,6 +626,7 @@ class _GlintGameViewState extends State<GlintGameView>
           camera.position.z,
           0,
           ...fogUniform,
+          ..._disabledShadowMatrix,
           ...punctualLights.positionRange,
           ...punctualLights.colorIntensity,
           ...punctualLights.directionOuterCos,
@@ -531,6 +673,12 @@ class _GlintGameViewState extends State<GlintGameView>
               )
             : model.rig?.nodeWorldTransformsFromPose(instance.animationPose!);
         final material = instance.material;
+        final shaderMaterial = instance.shaderMaterial;
+        final graphInfo = shaderMaterial == null
+            ? null
+            : hostBuffer.emplace(
+                shaderMaterial.packUniforms(_shaderTime).buffer.asByteData(),
+              );
         final overrideFactor = material?.linearBaseColorFactor;
         for (final (nodeIndex, meshIndex) in model.parts) {
           final buffers = model.meshes[meshIndex];
@@ -566,9 +714,13 @@ class _GlintGameViewState extends State<GlintGameView>
               nodeWorlds!,
             );
           }
-          final geometryPipeline = buffers.isSkinned
-              ? skinnedPipeline
-              : pipeline;
+          final geometryPipeline = shaderMaterial == null
+              ? (buffers.isSkinned ? skinnedPipeline : pipeline)
+              : _obtainGraphPipeline(
+                  context,
+                  shaderMaterial,
+                  skinned: buffers.isSkinned,
+                );
           useGeometryPipeline(geometryPipeline);
 
           pass.bindVertexBuffer(
@@ -615,7 +767,7 @@ class _GlintGameViewState extends State<GlintGameView>
                 }
               }
               pass.bindUniform(
-                skinnedPipeline.vertexShader.getUniformSlot('SkinnedDrawInfo'),
+                geometryPipeline.vertexShader.getUniformSlot('SkinnedDrawInfo'),
                 hostBuffer.emplace(_skinnedDrawScratch.buffer.asByteData()),
               );
             } else {
@@ -629,7 +781,7 @@ class _GlintGameViewState extends State<GlintGameView>
               _drawScratch[36] = material?.metallic ?? submesh.metallicFactor;
               _drawScratch[37] = material?.roughness ?? submesh.roughnessFactor;
               pass.bindUniform(
-                pipeline.vertexShader.getUniformSlot('DrawInfo'),
+                geometryPipeline.vertexShader.getUniformSlot('DrawInfo'),
                 hostBuffer.emplace(_drawScratch.buffer.asByteData()),
               );
             }
@@ -659,6 +811,39 @@ class _GlintGameViewState extends State<GlintGameView>
               assets.radianceTexture,
               sampler: environmentSampler,
             );
+            pass.bindTexture(
+              geometryPipeline.fragmentShader.getUniformSlot('shadow_map'),
+              assets.whiteTexture,
+            );
+            if (shaderMaterial != null) {
+              pass.bindUniform(
+                geometryPipeline.fragmentShader.getUniformSlot(
+                  'GraphMaterialInfo',
+                ),
+                graphInfo!,
+              );
+              for (final entry
+                  in shaderMaterial.program.textureUniforms.entries) {
+                final textureKey = shaderMaterial.textures[entry.key]!;
+                final texture = assets.shaderTextures[textureKey];
+                if (texture == null) {
+                  throw StateError(
+                    'Unknown shader texture "$textureKey". Add it to '
+                    'GlintGameView.shaderTextures.',
+                  );
+                }
+                pass.bindTexture(
+                  geometryPipeline.fragmentShader.getUniformSlot(entry.value),
+                  texture,
+                  sampler: gpu.SamplerOptions(
+                    minFilter: gpu.MinMagFilter.linear,
+                    magFilter: gpu.MinMagFilter.linear,
+                    widthAddressMode: gpu.SamplerAddressMode.repeat,
+                    heightAddressMode: gpu.SamplerAddressMode.repeat,
+                  ),
+                );
+              }
+            }
             pass.draw();
           }
         }
@@ -699,6 +884,76 @@ class _GlintGameViewState extends State<GlintGameView>
         }
       }
 
+      if (frame.particles.any((batch) => batch.count > 0)) {
+        final particlePipeline = _obtainParticlePipeline(context);
+        pass.clearBindings();
+        pass.bindPipeline(particlePipeline);
+        pass.setDepthWriteEnable(false);
+        pass.setDepthCompareOperation(gpu.CompareFunction.less);
+        pass.setCullMode(gpu.CullMode.none);
+        pass.setColorBlendEnable(true);
+        final particleFrameInfo = hostBuffer.emplace(
+          Float32List.fromList(viewProjection.storage).buffer.asByteData(),
+        );
+        final forward = (camera.target - camera.position).normalized;
+        var right = forward.cross(camera.up).normalized;
+        if (right.length == 0) right = const Vector3(1, 0, 0);
+        final billboardUp = right.cross(forward).normalized;
+
+        for (final batch in frame.particles) {
+          if (batch.count == 0) continue;
+          final textureKey = batch.config.texture;
+          final particleTexture = textureKey == null
+              ? assets.whiteTexture
+              : assets.particleTextures[textureKey];
+          if (particleTexture == null) {
+            throw StateError(
+              'Unknown particle texture "$textureKey". Add it to '
+              'GlintGameView.particleTextures.',
+            );
+          }
+          pass.setColorBlendEquation(
+            gpu.ColorBlendEquation(
+              sourceColorBlendFactor: gpu.BlendFactor.sourceAlpha,
+              destinationColorBlendFactor:
+                  batch.config.blendMode == GlintParticleBlendMode.additive
+                  ? gpu.BlendFactor.one
+                  : gpu.BlendFactor.oneMinusSourceAlpha,
+              sourceAlphaBlendFactor: gpu.BlendFactor.one,
+              destinationAlphaBlendFactor:
+                  batch.config.blendMode == GlintParticleBlendMode.additive
+                  ? gpu.BlendFactor.one
+                  : gpu.BlendFactor.oneMinusSourceAlpha,
+            ),
+          );
+          final vertexView = _particleVertices(
+            batch,
+            camera.position,
+            right,
+            billboardUp,
+          );
+          final uploadedVertices = hostBuffer.emplace(vertexView);
+          pass.bindVertexBuffer(uploadedVertices, batch.count * 6);
+          pass.bindUniform(
+            particlePipeline.vertexShader.getUniformSlot('ParticleFrameInfo'),
+            particleFrameInfo,
+          );
+          pass.bindTexture(
+            particlePipeline.fragmentShader.getUniformSlot('particle_texture'),
+            particleTexture,
+            sampler: gpu.SamplerOptions(
+              minFilter: gpu.MinMagFilter.linear,
+              magFilter: gpu.MinMagFilter.linear,
+              widthAddressMode: gpu.SamplerAddressMode.clampToEdge,
+              heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
+            ),
+          );
+          pass.draw();
+          drawCalls++;
+          triangles += batch.count * 2;
+        }
+      }
+
       final completer = Completer<void>();
       commandBuffer.submit(
         completionCallback: (success) {
@@ -719,6 +974,84 @@ class _GlintGameViewState extends State<GlintGameView>
 
   ByteData _floats(List<double> values) =>
       Float32List.fromList(values).buffer.asByteData();
+
+  ByteData _particleVertices(
+    GlintParticleRenderBatch batch,
+    Vector3 cameraPosition,
+    Vector3 right,
+    Vector3 up,
+  ) {
+    const floatsPerVertex = 9;
+    const verticesPerParticle = 6;
+    final floatCount = batch.count * verticesPerParticle * floatsPerVertex;
+    if (_particleVertexScratch.length < floatCount) {
+      var capacity = math.max(256, _particleVertexScratch.length);
+      while (capacity < floatCount) {
+        capacity *= 2;
+      }
+      _particleVertexScratch = Float32List(capacity);
+    }
+    while (_particleOrderScratch.length < batch.count) {
+      _particleOrderScratch.add(_particleOrderScratch.length);
+    }
+    for (var i = 0; i < batch.count; i++) {
+      _particleOrderScratch[i] = i;
+    }
+    final order = _particleOrderScratch.sublist(0, batch.count);
+    if (batch.config.sortMode == GlintParticleSortMode.backToFront) {
+      double distanceSquared(int index) {
+        final delta = batch.worldPosition(index) - cameraPosition;
+        return delta.dot(delta);
+      }
+
+      order.sort((a, b) => distanceSquared(b).compareTo(distanceSquared(a)));
+    }
+
+    var cursor = 0;
+    const corners = <(double, double, double, double)>[
+      (-1, -1, 0, 1),
+      (1, -1, 1, 1),
+      (1, 1, 1, 0),
+      (-1, -1, 0, 1),
+      (1, 1, 1, 0),
+      (-1, 1, 0, 0),
+    ];
+    for (final index in order) {
+      final center = batch.worldPosition(index);
+      final halfSize = batch.size(index) * .5;
+      final rotation = batch.rotations[index];
+      final cosine = math.cos(rotation);
+      final sine = math.sin(rotation);
+      final color = batch.color(index);
+      final sheet = batch.config.spriteSheet;
+      final frame = batch.spriteFrame(index);
+      final columns = sheet?.columns ?? 1;
+      final rows = sheet?.rows ?? 1;
+      final column = frame % columns;
+      final row = frame ~/ columns;
+      final u0 = column / columns;
+      final v0 = row / rows;
+      final uScale = 1 / columns;
+      final vScale = 1 / rows;
+      for (final corner in corners) {
+        final x = corner.$1 * halfSize;
+        final y = corner.$2 * halfSize;
+        final rotatedX = x * cosine - y * sine;
+        final rotatedY = x * sine + y * cosine;
+        final position = center + right * rotatedX + up * rotatedY;
+        _particleVertexScratch[cursor++] = position.x;
+        _particleVertexScratch[cursor++] = position.y;
+        _particleVertexScratch[cursor++] = position.z;
+        _particleVertexScratch[cursor++] = u0 + corner.$3 * uScale;
+        _particleVertexScratch[cursor++] = v0 + corner.$4 * vScale;
+        _particleVertexScratch[cursor++] = color.r;
+        _particleVertexScratch[cursor++] = color.g;
+        _particleVertexScratch[cursor++] = color.b;
+        _particleVertexScratch[cursor++] = color.a;
+      }
+    }
+    return _particleVertexScratch.buffer.asByteData(0, floatCount * 4);
+  }
 
   /// World matrix matching [Transform3D.apply]: scale, then X/Y/Z rotation,
   /// then translation. Composes into [target] to avoid per-draw allocation.
@@ -874,12 +1207,18 @@ class _GlintGameViewState extends State<GlintGameView>
 class _GameAssets {
   const _GameAssets({
     required this.models,
+    required this.whiteTexture,
+    required this.particleTextures,
+    required this.shaderTextures,
     required this.irradianceTexture,
     required this.radianceTexture,
     required this.environmentStrength,
   });
 
   final Map<String, _GameModel> models;
+  final gpu.Texture whiteTexture;
+  final Map<String, gpu.Texture> particleTextures;
+  final Map<String, gpu.Texture> shaderTextures;
   final gpu.Texture irradianceTexture;
   final gpu.Texture radianceTexture;
   final double environmentStrength;
@@ -940,6 +1279,7 @@ class _MeshBuffers {
     GlintGlbMesh mesh,
     gpu.GpuContext context,
     gpu.Texture whiteTexture,
+    GlintTextureDecoder textureDecoder,
   ) async {
     gpu.Texture uploadPixels(GlintTexturePixels pixels) {
       final texture = context.createTexture(
@@ -961,7 +1301,7 @@ class _MeshBuffers {
         material.baseColorImageBytes == null
             ? whiteTexture
             : uploadPixels(
-                await GlintTexturePixels.decode(
+                await textureDecoder.decode(
                   material.baseColorImageBytes!,
                   debugLabel: 'embedded GLB base-color texture',
                   maximumDimension: 1024,
@@ -1058,7 +1398,10 @@ class _GameModel {
   final List<(int, int)> parts;
   final GlintGlbRig? rig;
 
-  static Future<_GameModel> load(Model source) async {
+  static Future<_GameModel> load(
+    Model source,
+    GlintTextureDecoder textureDecoder,
+  ) async {
     final context = gpu.gpuContext;
     final whiteTexture = context.createTexture(
       gpu.StorageMode.hostVisible,
@@ -1074,7 +1417,12 @@ class _GameModel {
       return _GameModel(
         meshes: [
           for (final mesh in rig.meshes)
-            await _MeshBuffers.build(mesh, context, whiteTexture),
+            await _MeshBuffers.build(
+              mesh,
+              context,
+              whiteTexture,
+              textureDecoder,
+            ),
         ],
         parts: [
           for (var i = 0; i < rig.nodes.length; i++)
@@ -1085,7 +1433,9 @@ class _GameModel {
     }
     final mesh = GlintGlbMesh.parse(bytes, debugLabel: source.debugLabel);
     return _GameModel(
-      meshes: [await _MeshBuffers.build(mesh, context, whiteTexture)],
+      meshes: [
+        await _MeshBuffers.build(mesh, context, whiteTexture, textureDecoder),
+      ],
       parts: const [(-1, 0)],
     );
   }

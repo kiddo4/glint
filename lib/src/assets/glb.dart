@@ -1320,7 +1320,7 @@ class _GlbReader {
     final materialIndex = primitive['material'] as int?;
     if (materialIndex == null) return null;
     final materials = _optionalList(document['materials']);
-    if (materialIndex >= materials.length) return null;
+    if (materialIndex < 0 || materialIndex >= materials.length) return null;
     return _materialImage(materials[materialIndex] as Map);
   }
 
@@ -1330,10 +1330,18 @@ class _GlbReader {
     final textureIndex = textureInfo?['index'] as int?;
     if (textureIndex == null) return null;
     final textures = _optionalList(document['textures']);
-    if (textureIndex >= textures.length) return null;
-    final imageIndex = (textures[textureIndex] as Map)['source'] as int?;
+    if (textureIndex < 0 || textureIndex >= textures.length) return null;
+    final texture = textures[textureIndex] as Map;
+    final extensions = texture['extensions'] as Map?;
+    final basisExtension = extensions?['KHR_texture_basisu'] as Map?;
+    // KHR_texture_basisu supplies the compressed image in its extension-level
+    // source. Prefer it over the optional PNG/JPEG fallback source.
+    final imageIndex =
+        (basisExtension?['source'] as int?) ?? (texture['source'] as int?);
     final images = _optionalList(document['images']);
-    if (imageIndex == null || imageIndex >= images.length) return null;
+    if (imageIndex == null || imageIndex < 0 || imageIndex >= images.length) {
+      return null;
+    }
     final image = images[imageIndex] as Map;
     final viewIndex = image['bufferView'] as int?;
     if (viewIndex == null) return null;

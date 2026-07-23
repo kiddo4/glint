@@ -1,15 +1,26 @@
 name: glint_box3d
 description: High-performance Box3D physics backend for Glint Engine.
 version: 0.1.0
-publish_to: none
+homepage: https://glint.kiddobuild.dev
+repository: https://github.com/kiddo4/glint/tree/main/packages/glint_box3d
+topics:
+  - physics
+  - box3d
+  - game-engine
+  - simulation
+  - flutter
+
+platforms:
+  ios:
+  macos:
+  android:
 
 environment:
   sdk: ^3.12.1
 
 dependencies:
   box3d: ^0.1.0
-  glint_engine:
-    path: ../..
+  glint_engine: ^0.2.0
   vector_math: ^2.2.0
 
 dev_dependencies:

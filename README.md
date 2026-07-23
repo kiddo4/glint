@@ -52,8 +52,12 @@ animation, fog, a chase camera, and a Flutter HUD.
 | Materials | Per-primitive material batches: base-color textures + factors, metallic, roughness; embedded PNG/JPEG textures (auto-capped at 1K for mobile memory) |
 | Lighting | GGX metallic-roughness PBR, directional/point/spot lights, directional shadows, HDRI image-based lighting (`.hdr` decoder + irradiance/specular prefiltering built in), distance fog |
 | Animation | glTF node and skeletal animation: vertex skinning, LINEAR/STEP/CUBICSPLINE sampling, crossfades, additive/override layers, bone masks, events, state machines, and root motion |
-| Physics | Backend-neutral fixed stepping plus an optional Box3D backend: angular rigid bodies, CCD, sleeping, compound/convex/mesh/heightfield colliders, joints, events, ray/overlap/shape queries, filtering, interpolation, rollback snapshots, and deterministic replay |
+| Physics | Backend-neutral fixed stepping plus an optional Box3D backend: angular rigid bodies, CCD, sleeping, compound/convex/mesh/heightfield colliders, joints, persistent contacts, ray/overlap/shape queries, character and vehicle motors, ragdolls, profiling, rollback snapshots, and deterministic replay |
 | Vehicle dynamics | Optional raycast vehicle layer with self-excluding wheel rays, spring/damper suspension, material-aware tire grip, dynamic-surface reactions, anti-roll, automatic gears, brakes/handbrake, aero, boost, runtime grip hooks, and telemetry |
+| Particles | Deterministic pooled simulation with point/box/sphere/cone emitters, rate and burst emission, curves, gradients, noise, local/world space, sprite sheets, physics-backed collision, alpha/additive blending, and GPU billboards |
+| Audio | Backend-neutral cached clips, memory/file/asset/network sources, streaming policy, mixer buses, voice control, listener/source motion, attenuation, and Doppler; optional native SoLoud/miniaudio backend |
+| Compressed textures | Validated KTX2 parsing, `KHR_texture_basisu` resolution, mip selection, uncompressed KTX2 decoding, and optional official Basis Universal native transcoding on a background isolate |
+| Shader graphs | Typed JSON graphs with cycle/type validation, parameters and custom textures, engine PBR/IBL/lights/fog integration, offline Impeller compilation, and static or skinned runtime materials |
 | Interaction | Orbit/pan/zoom gestures, scroll-aware mode for scrollable pages, tap picking via CPU raycasting (Möller–Trumbore) |
 | Widgets in 3D | `Label3D`: project any widget onto a model anchor with fade/hide occlusion policies |
 | Game loop | `GlintGameView`: ticker-driven frames, unlimited model instances with per-node transforms, free look-at camera, translucent blob shadows, frustum culling |
@@ -226,6 +230,40 @@ product interactions, characters, destructible props, triggers, constraints,
 and spatial queries. `GlintRaycastVehicle` is a higher-level consumer of the
 same API and can be omitted entirely.
 
+The reusable character motor is also backend-neutral. It owns input policy
+instead of assuming a particular genre, while the engine handles capsule
+sweeps, slopes, steps, moving platforms, ground snap, acceleration, and jump
+state:
+
+```dart
+final character = GlintCharacterController.create(
+  world: physics,
+  position: const Vector3(0, 1, 0),
+);
+character.desiredVelocity = inputDirection * runSpeed;
+character.jump(6);
+```
+
+Contacts remain queryable after their begin event and emit
+`GlintContactStayed` each fixed tick. This supports damage volumes, pressure
+plates, feet, tire/surface state, and interaction prompts without maintaining a
+second pair cache:
+
+```dart
+for (final contact in physics.activeContacts) {
+  if (contact.involves(player)) handleContact(contact);
+}
+
+physics.addStepCompletedCallback((stats) {
+  telemetry.recordPhysics(stats.backendTime, stats.activeContactCount);
+});
+```
+
+`GlintRagdollDefinition` maps any chosen rig nodes to colliders and fixed,
+revolute, or spherical constraints. A `GlintRagdoll` can follow animation as
+kinematic bodies, switch to simulation, accept per-part impulses, and return a
+partially or fully physics-driven `GlintAnimationPose` for the skinned renderer.
+
 ### 8. Record and verify physics
 
 Snapshots restore rigid bodies, the fixed-step clock, gravity, and registered
@@ -274,9 +312,143 @@ Scale it through Dart defines such as `GLINT_STRESS_BODIES`,
 `GLINT_STRESS_VEHICLES`, `GLINT_STRESS_STEPS`, `GLINT_STRESS_QUERIES`, and
 `GLINT_STRESS_MINIMUM_REALTIME`.
 
+### 10. Build particle effects
+
+Particle simulation is independent of rendering, seeded for replay-friendly
+results, and stored in dense reusable typed arrays. Feed its zero-copy render
+batch to any `GlintGameFrame`:
+
+```dart
+final sparks = GlintParticleSystem(
+  const GlintParticleConfig(
+    maxParticles: 2000,
+    emissionRate: 240,
+    lifetime: GlintDoubleRange(.25, 1.1),
+    startSpeed: GlintDoubleRange(2, 8),
+    shape: GlintConeParticleShape(angle: .35, baseRadius: .1),
+    gravity: Vector3(0, -9.81, 0),
+    blendMode: GlintParticleBlendMode.additive,
+  ),
+  seed: 42,
+);
+
+// In onFrame:
+sparks.update(dt, collisions: GlintPhysicsParticleCollisionResolver(world));
+return GlintGameFrame(
+  camera: camera,
+  instances: instances,
+  particles: [sparks.renderBatch],
+);
+```
+
+Use `simulationSpace: local` for an emitter that follows a moving transform,
+or `world` for trails that remain behind. Collision queries and emitted events
+are world-space in both modes.
+
+### 11. Add spatial audio
+
+The core audio contract does not lock a game to one mixer. The optional
+`glint_soloud` package supplies the production SoLoud/miniaudio backend:
+
+```dart
+final audio = GlintAudioEngine(backend: GlintSoLoudAudioBackend());
+await audio.initialize(
+  config: const GlintAudioConfig(maxActiveVoices: 96),
+);
+final effects = audio.createBus('effects');
+final impact = await audio.load(
+  const GlintAudioSource.asset('assets/audio/impact.ogg'),
+);
+
+audio.listener = GlintAudioListener(
+  position: camera.position,
+  forward: camera.target - camera.position,
+);
+audio.playSpatial(
+  impact,
+  hit.position,
+  bus: effects,
+  options: const GlintSpatialAudioOptions(
+    minimumDistance: 1,
+    maximumDistance: 80,
+    dopplerFactor: 1,
+  ),
+);
+```
+
+Assets, files, URLs, and encoded memory buffers are supported. Mark music as
+streamed and protected; keep short gameplay effects in memory for low latency.
+
+### 12. Load KTX2 and Basis textures
+
+Uncompressed RGBA/RGB/BGRA KTX2 works through the core decoder. BasisLZ,
+UASTC, Zstd-supercompressed KTX2, and standalone `.basis` use the optional
+native reference transcoder:
+
+```dart
+final decoder = GlintTextureDecoder(
+  basisTranscoder: const GlintBasisTranscoder(),
+);
+
+GlintGameView(
+  textureDecoder: decoder,
+  particleTextures: const {
+    'smoke': GlintTextureSource.asset('assets/smoke.ktx2'),
+  },
+  // ...
+)
+```
+
+Glint also follows `KHR_texture_basisu.source` inside embedded GLB materials,
+including assets that retain a PNG/JPEG fallback. The selected mip is decoded
+on a background isolate. Flutter GPU does not yet expose ASTC/ETC/BC texture
+formats or per-mip uploads, so compressed assets currently become RGBA8 before
+GPU upload; this saves download/package size, but not final GPU texture memory.
+
+### 13. Compile custom shader graphs
+
+Graphs are JSON assets, type-checked before shader compilation, and compiled
+offline by Impeller. They can drive base color, opacity, emissive, metallic,
+roughness, and world-space normal from UV/time/world inputs, arithmetic,
+parameters, custom textures, Fresnel, and procedural noise.
+
+Create `hook/build.dart` in the application:
+
+```dart
+import 'package:glint_engine/shader_graph_build.dart';
+import 'package:hooks/hooks.dart';
+
+Future<void> main(List<String> args) => build(args, (input, output) async {
+  await buildGlintShaderGraphBundle(
+    buildInput: input,
+    buildOutput: output,
+    graphs: const {'Hologram': 'assets/hologram.shadergraph.json'},
+  );
+});
+```
+
+List `build/shaderbundles/glint_materials.shaderbundle` in `flutter.assets`,
+then reference the compiled fragment on an instance. Glint reuses its static or
+skinned vertex stage and preserves PBR, HDRI, punctual lights, fog, and shadow
+uniforms around the graph surface:
+
+```dart
+final graph = GlintShaderGraph.parse(await rootBundle.loadString(graphAsset));
+final program = const GlintShaderGraphCompiler().compile(graph);
+final material = GlintShaderGraphMaterial(
+  bundleAsset: 'build/shaderbundles/glint_materials.shaderbundle',
+  fragmentEntry: 'Hologram',
+  program: program,
+  parameters: const {'glow': 2.5},
+);
+```
+
+For CI or editor validation without a Flutter build, run
+`dart run glint_engine:glint_shader_graph input.json output.frag`.
+
 ## Examples
 
-`example/` is a launcher with six demos, each a compact reference:
+`example/` is a launcher with seven demos, each a compact reference:
 
 - **Duck Dash** — endless runner: imported multi-material models, animation
   playback, fog, blob shadows, swipe input, Flutter HUD.
@@ -288,6 +460,8 @@ Scale it through Dart defines such as `GLINT_STRESS_BODIES`,
   deformation.
 - **Arcade physics lab** — a compound-body car with four-wheel suspension,
   tire grip, gears, drift brake, boost, dynamic props, and a chase camera.
+- **Advanced systems lab** — two pooled particle emitters, a generated
+  in-memory 3D sound, and an offline-compiled hologram shader graph.
 
 ```sh
 git clone https://github.com/kiddo4/glint.git
@@ -356,11 +530,16 @@ above.
   factors, but normal/ORM maps and Draco compression are not supported yet.
 - **Blurry textures on imported assets** — embedded textures are decoded at
   a maximum of 1024px per side to protect mobile memory.
+- **SoLoud reports that CMake is missing** — install CMake before building the
+  optional native audio backend (`brew install cmake` on macOS).
+- **A shader graph bundle is missing** — ensure the app has `hook/build.dart`
+  and lists its generated `build/shaderbundles/*.shaderbundle` under assets.
 
 ## Not yet implemented
 
-Morph targets, normal/ORM maps, Draco compression, KTX, custom shaders,
-audio, Web/Windows/Linux rendering. Open an issue if one
+Morph targets, normal/ORM maps, Draco compression, a visual graph editor,
+GPU-resident compressed textures (pending Flutter GPU APIs), soft bodies,
+network transports, and Web/Windows/Linux rendering. Open an issue if one
 of these is blocking you — real projects are what decide what comes next.
 
 ## License

@@ -34,6 +34,9 @@ dependencies:
     path: ..
   glint_box3d:
     path: ../packages/glint_box3d
+  glint_soloud:
+    path: ../packages/glint_soloud
+  hooks: ^2.0.2
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -62,6 +65,8 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/shaders/hologram.shadergraph.json
+    - build/shaderbundles/glint_materials.shaderbundle
     - assets/models/low_poly_rocks_and_trees.glb
     - assets/models/cc0_gold_coin_blank.glb
 

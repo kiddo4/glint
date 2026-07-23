@@ -1,0 +1,31 @@
+{
+  "UnlitVertex": {
+    "type": "vertex",
+    "file": "shaders/unlit.vert"
+  },
+  "SkinnedUnlitVertex": {
+    "type": "vertex",
+    "file": "shaders/skinned_unlit.vert"
+  },
+  "UnlitFragment": {
+    "type": "fragment",
+    "file": "shaders/unlit.frag"
+  },
+  "ShadowVertex": {
+    "type": "vertex",
+    "file": "shaders/shadow.vert"
+  },
+  "ShadowFragment": {
+    "type": "fragment",
+    "file": "shaders/shadow.frag"
+  },
+  "ParticleVertex": {
+    "type": "vertex",
+    "file": "shaders/particle.vert"
+  },
+  "ParticleFragment": {
+    "type": "fragment",
+    "file": "shaders/particle.frag"
+  }
+}
+

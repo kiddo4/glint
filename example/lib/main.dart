@@ -6,6 +6,7 @@ import 'duck_dash.dart';
 import 'labels_demo.dart';
 import 'physics_demo.dart';
 import 'skinned_character_demo.dart';
+import 'systems_demo.dart';
 import 'viewer.dart';
 
 Future<void> main() async {
@@ -107,6 +108,14 @@ class _LauncherPage extends StatelessWidget {
                   'motion, suspension, grip, gears, boost, and self-filtered rays.',
               icon: Icons.sports_motorsports,
               builder: (_) => const PhysicsDemoPage(),
+            ),
+            _DemoCard(
+              title: 'Advanced systems lab',
+              subtitle:
+                  'Deterministic GPU particles, generated spatial audio, and '
+                  'an offline-compiled custom shader graph working together.',
+              icon: Icons.auto_awesome,
+              builder: (_) => const SystemsDemoPage(),
             ),
           ],
         ),

@@ -172,6 +172,171 @@ void main() {
     world.dispose();
   });
 
+  test('kinematic character motor walks, grounds, and jumps', () {
+    final world = GlintBox3dWorld(fixedTimeStep: 1 / 120);
+    final ground = world.createBody(
+      const GlintRigidBodyConfig(type: GlintBodyType.static),
+    );
+    ground.addCollider(
+      const GlintBoxCollider(Vector3(20, .5, 20)),
+      localPosition: const Vector3(0, -.5, 0),
+    );
+    final character = GlintCharacterController.create(
+      world: world,
+      position: const Vector3(0, 1, 0),
+    );
+    character.desiredVelocity = const Vector3(3, 0, 0);
+
+    for (var i = 0; i < 120; i++) {
+      world.stepFixed();
+    }
+
+    expect(character.isGrounded, isTrue);
+    expect(character.body.position.x, greaterThan(1));
+    final groundedHeight = character.body.position.y;
+    expect(character.jump(5), isTrue);
+    for (var i = 0; i < 12; i++) {
+      world.stepFixed();
+    }
+    expect(character.isGrounded, isFalse);
+    expect(character.body.position.y, greaterThan(groundedHeight));
+    character.dispose();
+    world.dispose();
+  });
+
+  test(
+    'persistent contacts emit stay events and clear after separation',
+    () async {
+      final world = GlintBox3dWorld(fixedTimeStep: 1 / 120);
+      final ground = world.createBody(
+        const GlintRigidBodyConfig(type: GlintBodyType.static),
+      );
+      ground.addCollider(
+        const GlintBoxCollider(Vector3(5, .5, 5)),
+        localPosition: const Vector3(0, -.5, 0),
+      );
+      final ball = world.createBody(
+        const GlintRigidBodyConfig(position: Vector3(0, 2, 0)),
+      );
+      ball.addCollider(const GlintSphereCollider(.5));
+      final events = <GlintCollisionEvent>[];
+      final subscription = world.collisions.listen(events.add);
+
+      for (var i = 0; i < 180; i++) {
+        world.stepFixed();
+      }
+
+      expect(world.activeContacts, isNotEmpty);
+      expect(events, contains(isA<GlintContactBegan>()));
+    expect(events, contains(isA<GlintContactStayed>()));
+    ball.setTransform(const Vector3(0, 5, 0), GlintQuaternion.identity);
+    for (var i = 0; i < 3; i++) {
+      world.stepFixed();
+    }
+      expect(world.activeContacts, isEmpty);
+      expect(events.last, isA<GlintContactEnded>());
+      await subscription.cancel();
+      world.dispose();
+    },
+  );
+
+  test('all portable joint families remain finite under native solving', () {
+    final world = GlintBox3dWorld(
+      gravity: Vector3.zero,
+      fixedTimeStep: 1 / 120,
+    );
+    final joints = <GlintJoint>[];
+    (GlintRigidBody, GlintRigidBody) pair(double x) {
+      final a = world.createBody(
+        GlintRigidBodyConfig(
+          type: GlintBodyType.static,
+          position: Vector3(x, 0, 0),
+        ),
+      )..addCollider(const GlintSphereCollider(.1));
+      final b = world.createBody(
+        GlintRigidBodyConfig(position: Vector3(x, 1, 0)),
+      )..addCollider(const GlintSphereCollider(.1));
+      return (a, b);
+    }
+
+    var bodies = pair(-4);
+    joints.add(
+      world.createJoint(
+        GlintFixedJointConfig(
+          bodyA: bodies.$1,
+          bodyB: bodies.$2,
+          frameA: const GlintJointFrame(position: Vector3(0, 1, 0)),
+        ),
+      ),
+    );
+    bodies = pair(-2);
+    joints.add(
+      world.createJoint(
+        GlintRevoluteJointConfig(
+          bodyA: bodies.$1,
+          bodyB: bodies.$2,
+          frameA: const GlintJointFrame(position: Vector3(0, 1, 0)),
+          frameB: const GlintJointFrame(),
+          lowerLimit: -.5,
+          upperLimit: .5,
+        ),
+      ),
+    );
+    bodies = pair(0);
+    joints.add(
+      world.createJoint(
+        GlintPrismaticJointConfig(
+          bodyA: bodies.$1,
+          bodyB: bodies.$2,
+          frameA: const GlintJointFrame(position: Vector3(0, 1, 0)),
+          frameB: const GlintJointFrame(),
+          lowerLimit: -.25,
+          upperLimit: .25,
+        ),
+      ),
+    );
+    bodies = pair(2);
+    joints.add(
+      world.createJoint(
+        GlintSphericalJointConfig(
+          bodyA: bodies.$1,
+          bodyB: bodies.$2,
+          frameA: const GlintJointFrame(position: Vector3(0, 1, 0)),
+          coneAngle: .6,
+          lowerTwist: -.4,
+          upperTwist: .4,
+        ),
+      ),
+    );
+    bodies = pair(4);
+    joints.add(
+      world.createJoint(
+        GlintDistanceJointConfig(
+          bodyA: bodies.$1,
+          bodyB: bodies.$2,
+          length: 1,
+          minimumLength: .8,
+          maximumLength: 1.2,
+          springFrequency: 4,
+          springDampingRatio: .7,
+        ),
+      ),
+    );
+
+    for (var i = 0; i < 120; i++) {
+      world.stepFixed();
+    }
+    for (final body in world.bodies) {
+      expect(body.position.x.isFinite, isTrue);
+      expect(body.position.y.isFinite, isTrue);
+      expect(body.position.z.isFinite, isTrue);
+    }
+    for (final joint in joints.reversed) {
+      joint.destroy();
+    }
+    world.dispose();
+  });
+
   test('vehicle configuration rejects a non-dynamic chassis', () {
     final world = GlintBox3dWorld(gravity: Vector3.zero);
     final chassis = world.createBody(

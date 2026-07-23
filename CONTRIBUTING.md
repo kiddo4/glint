@@ -19,6 +19,8 @@ push. Fork or branch, open a PR, and describe what changed and why.
 - Flutter GPU enabled to actually see the renderer run — see the README's
   "Enable Flutter GPU" section for the per-platform manifest flags, or pass
   `--enable-impeller --enable-flutter-gpu` to `flutter run` for a quick trial.
+- CMake when building the optional `glint_soloud` backend (`brew install cmake`
+  on macOS).
 
 ## Running checks
 
@@ -47,6 +49,37 @@ flutter test
 flutter test benchmark/physics_stress_test.dart --reporter expanded
 ```
 
+Texture/audio backend changes run their packages independently:
+
+```sh
+cd packages/glint_basis && flutter analyze && flutter test
+cd ../glint_soloud && flutter analyze
+```
+
+## Release order
+
+The repository-local `pubspec_overrides.yaml` files keep optional packages on
+the current engine while developing. Their published manifests use hosted
+constraints, so consumers never receive a path dependency.
+
+Publish and verify releases in dependency order:
+
+1. Update the website and task-oriented documentation.
+2. Dry-run and publish `glint_engine` from the repository root.
+3. Stage each optional package outside the parent repository ignore rules,
+   then dry-run and publish `glint_box3d`, `glint_basis`, and `glint_soloud`.
+4. Create a clean external Flutter project and resolve only hosted packages.
+
+```sh
+stage_dir="$(tool/stage_pub_package.sh packages/glint_box3d)"
+dart pub publish --dry-run --directory="$stage_dir"
+```
+
+Repeat the staging command for each optional package. The stage intentionally
+excludes local overrides, build output, tests, and lockfiles; after
+`glint_engine` is live, validation therefore exercises the same hosted
+dependency graph users receive.
+
 ## Editing shaders
 
 `shaders/unlit.vert` and `shaders/unlit.frag` are GLSL source. The engine
@@ -56,11 +89,14 @@ editing the `.vert`/`.frag` files alone does nothing until you recompile it.
 There's no `flutter build` step for this (Flutter's own `flutter: shaders:`
 pubspec key is for `dart:ui` `FragmentProgram`, a different mechanism —
 `flutter_gpu`'s shader bundles are compiled offline with `impellerc`).
-Rebuild after any shader edit with:
+`shaders/glint.shaderbundle.json` is the canonical entry-point manifest. Rebuild
+after any engine shader edit by passing its compact JSON contents to
+`impellerc`:
 
 ```sh
-<path-to-flutter-sdk>/bin/cache/artifacts/engine/darwin-x64/impellerc \
-  --shader-bundle='{"UnlitVertex": {"type": "vertex", "file": "shaders/unlit.vert"}, "UnlitFragment": {"type": "fragment", "file": "shaders/unlit.frag"}}' \
+bundle_json="$(jq -c . shaders/glint.shaderbundle.json)"
+<path-to-flutter-sdk>/bin/cache/artifacts/engine/<platform-arch>/impellerc \
+  --shader-bundle="$bundle_json" \
   --sl=shaders/glint.shaderbundle
 ```
 
@@ -70,6 +106,10 @@ engine artifact directory if you're not on macOS. This single invocation
 compiles all backends (Metal, GLES, Vulkan) into one bundle — no
 per-platform flags needed. Commit the resulting binary alongside your
 source changes.
+
+Application shader graphs use their own `hook/build.dart` and
+`buildGlintShaderGraphBundle`; they are generated automatically during an app
+build and should also be validated with the graph CLI described in the README.
 
 ## Verifying renderer changes
 

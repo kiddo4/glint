@@ -1,11 +1,17 @@
 // Glint's public API.
 export 'src/math.dart';
 export 'src/animation.dart';
+export 'src/audio.dart';
+export 'src/particles.dart';
+export 'src/shader_graph.dart';
 export 'src/physics.dart';
+export 'src/physics_character.dart';
+export 'src/physics_ragdoll.dart';
 export 'src/physics_replay.dart';
 export 'src/physics_stress.dart';
 export 'src/physics_vehicle.dart';
 export 'src/assets/texture_pixels.dart';
+export 'src/assets/ktx2.dart';
 export 'src/assets/environment.dart';
 export 'src/assets/hdr.dart';
 export 'src/assets/glb.dart';

@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 * Complete skeletal skinning handoff: render static skins through their rig,
   validate joint limits and indices, accept normalized integer weights, avoid
@@ -24,6 +24,32 @@
   recording, portable JSON replay tapes, quantized state digests with exact
   divergence reporting, and a seeded body/contact/query/vehicle stress runner.
 * Add skinned-character and arcade-physics showcase pages.
+* Add deterministic pooled particle simulation and GPU billboard rendering:
+  point/box/sphere/cone shapes, bursts, curves, gradients, sprite sheets,
+  local/world simulation, noise, sorting, alpha/additive blending, events, and
+  backend-neutral physics collision queries.
+* Add a backend-neutral audio facade with cached asset/file/network/memory
+  sources, streamed loading policy, buses, voice controls, spatial attenuation,
+  moving listeners/sources, and Doppler. Add the optional native
+  `glint_soloud` SoLoud/miniaudio backend.
+* Add validated KTX2 parsing, uncompressed RGBA/RGB/BGRA decode, mip selection,
+  `KHR_texture_basisu` GLB resolution, and the optional native `glint_basis`
+  package using the official Basis Universal transcoder on a background
+  isolate.
+* Add typed JSON shader graphs with cycle/type validation, parameters, custom
+  textures, offline Flutter GPU bundle compilation, and runtime PBR materials
+  for both static and skinned instances.
+* Add an advanced-systems showcase combining custom graph materials, pooled
+  particles, and generated in-memory spatial audio.
+* Add a backend-neutral capsule character motor with acceleration, gravity,
+  slopes, sweep-and-slide movement, step climbing, moving-platform velocity,
+  ground snapping, jumping, and rollback state.
+* Add declarative skeletal ragdolls with arbitrary node mappings, fixed/hinge/
+  spherical constraints, animation-driven kinematic mode, dynamic activation,
+  per-part impulses, and partial animation/physics pose blending.
+* Track active contacts and triggers in the core world, aggregate compound
+  shape pairs, emit fixed-tick contact-stay events, clean up destroyed pairs,
+  and expose per-step callback/backend timings and workload counters.
 
 ## 0.1.2
 

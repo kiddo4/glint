@@ -256,6 +256,23 @@ class GlintContactEnded extends GlintCollisionEvent {
   const GlintContactEnded(super.colliderA, super.colliderB);
 }
 
+/// Emitted once per fixed step while two non-trigger colliders remain in
+/// contact. [contacts] contains the most recently reported manifold; backends
+/// that only expose begin/end events retain the begin manifold.
+class GlintContactStayed extends GlintCollisionEvent {
+  const GlintContactStayed(
+    super.colliderA,
+    super.colliderB,
+    this.contacts, {
+    required this.steps,
+    required this.duration,
+  });
+
+  final List<GlintContactPoint> contacts;
+  final int steps;
+  final double duration;
+}
+
 class GlintTriggerEntered extends GlintCollisionEvent {
   const GlintTriggerEntered(super.colliderA, super.colliderB);
 }
@@ -389,6 +406,62 @@ abstract interface class GlintJoint {
 }
 
 typedef GlintFixedStepCallback = void Function(double fixedTimeStep);
+typedef GlintPhysicsStepCompletedCallback =
+    void Function(GlintPhysicsStepStatistics statistics);
+
+/// Timing and workload counters for one completed fixed physics step.
+class GlintPhysicsStepStatistics {
+  const GlintPhysicsStepStatistics({
+    required this.simulationStep,
+    required this.fixedTimeStep,
+    required this.callbackTime,
+    required this.backendTime,
+    required this.bodyCount,
+    required this.activeContactCount,
+    required this.activeTriggerCount,
+  });
+
+  final int simulationStep;
+  final double fixedTimeStep;
+  final Duration callbackTime;
+  final Duration backendTime;
+  final int bodyCount;
+  final int activeContactCount;
+  final int activeTriggerCount;
+
+  Duration get totalTime => callbackTime + backendTime;
+}
+
+/// A currently touching collider pair tracked by [GlintPhysicsWorld].
+class GlintActiveContact {
+  const GlintActiveContact({
+    required this.colliderA,
+    required this.colliderB,
+    required this.contacts,
+    required this.beganAtStep,
+    required this.currentStep,
+    required this.fixedTimeStep,
+  });
+
+  final GlintColliderHandle colliderA;
+  final GlintColliderHandle colliderB;
+  final List<GlintContactPoint> contacts;
+  final int beganAtStep;
+  final int currentStep;
+  final double fixedTimeStep;
+
+  int get steps => currentStep - beganAtStep + 1;
+  double get duration => steps * fixedTimeStep;
+
+  bool involves(GlintRigidBody body) =>
+      identical(colliderA.body, body) || identical(colliderB.body, body);
+
+  GlintColliderHandle? other(GlintColliderHandle collider) {
+    if (identical(colliderA, collider)) return colliderB;
+    if (identical(colliderB, collider)) return colliderA;
+    return null;
+  }
+}
 
 /// A gameplay system whose state participates in physics rollback.
 ///
@@ -497,11 +570,29 @@ abstract class GlintPhysicsWorld {
   int _simulationStep = 0;
   final Object _snapshotIdentity = Object();
   final List<GlintFixedStepCallback> _fixedStepCallbacks = [];
+  final List<GlintPhysicsStepCompletedCallback> _stepCompletedCallbacks = [];
   final List<GlintPhysicsSnapshotParticipant> _snapshotParticipants = [];
+  final StreamController<GlintCollisionEvent> _collisionEvents =
+      StreamController<GlintCollisionEvent>.broadcast(sync: true);
+  final Map<_GlintColliderPair, _TrackedContact> _activeContacts = {};
+  final Map<_GlintColliderPair, int> _activeTriggers = {};
+  GlintPhysicsStepStatistics? _lastStepStatistics;
+  bool _collisionEventsDisposed = false;
 
   String get backendName;
   List<GlintRigidBody> get bodies;
-  Stream<GlintCollisionEvent> get collisions;
+  Stream<GlintCollisionEvent> get collisions => _collisionEvents.stream;
+  List<GlintActiveContact> get activeContacts => [
+    for (final contact in _activeContacts.values)
+      contact.snapshot(
+        math.max(_simulationStep, contact.beganAtStep),
+        fixedTimeStep,
+      ),
+  ];
+  List<(GlintColliderHandle, GlintColliderHandle)> get activeTriggers => [
+    for (final pair in _activeTriggers.keys) (pair.a, pair.b),
+  ];
+  GlintPhysicsStepStatistics? get lastStepStatistics => _lastStepStatistics;
   double get interpolationAlpha => _interpolationAlpha;
   int get simulationStep => _simulationStep;
   double get simulationTime => _simulationStep * fixedTimeStep;
@@ -526,6 +617,16 @@ abstract class GlintPhysicsWorld {
 
   void removeFixedStepCallback(GlintFixedStepCallback callback) =>
       _fixedStepCallbacks.remove(callback);
+
+  void addStepCompletedCallback(GlintPhysicsStepCompletedCallback callback) {
+    if (!_stepCompletedCallbacks.contains(callback)) {
+      _stepCompletedCallbacks.add(callback);
+    }
+  }
+
+  void removeStepCompletedCallback(
+    GlintPhysicsStepCompletedCallback callback,
+  ) => _stepCompletedCallbacks.remove(callback);
 
   void addSnapshotParticipant(GlintPhysicsSnapshotParticipant participant) {
     if (!_snapshotParticipants.contains(participant)) {
@@ -659,11 +760,132 @@ abstract class GlintPhysicsWorld {
   }
 
   void _runFixedStep() {
+    final callbackWatch = Stopwatch()..start();
     for (final callback in List.of(_fixedStepCallbacks)) {
       callback(fixedTimeStep);
     }
+    callbackWatch.stop();
+    final backendWatch = Stopwatch()..start();
     stepBackend(fixedTimeStep, solverSubSteps);
+    backendWatch.stop();
     _simulationStep++;
+    _emitPersistentContacts();
+    final statistics = GlintPhysicsStepStatistics(
+      simulationStep: _simulationStep,
+      fixedTimeStep: fixedTimeStep,
+      callbackTime: callbackWatch.elapsed,
+      backendTime: backendWatch.elapsed,
+      bodyCount: bodies.length,
+      activeContactCount: _activeContacts.length,
+      activeTriggerCount: _activeTriggers.length,
+    );
+    _lastStepStatistics = statistics;
+    for (final callback in List.of(_stepCompletedCallbacks)) {
+      callback(statistics);
+    }
+  }
+
+  /// Backend hook for publishing collision events. It aggregates compound
+  /// shape pairs into stable collider pairs and maintains [activeContacts] and
+  /// [activeTriggers] before synchronously notifying listeners.
+  void emitCollisionEvent(GlintCollisionEvent event) {
+    if (_collisionEventsDisposed) return;
+    final pair = _GlintColliderPair(event.colliderA, event.colliderB);
+    switch (event) {
+      case GlintContactBegan value:
+        final existing = _activeContacts[pair];
+        if (existing == null) {
+          _activeContacts[pair] = _TrackedContact(
+            pair: pair,
+            contacts: List.unmodifiable(value.contacts),
+            beganAtStep: _simulationStep + 1,
+          );
+          _collisionEvents.add(value);
+        } else {
+          existing.references++;
+          existing.contacts = List.unmodifiable(value.contacts);
+        }
+      case GlintContactStayed value:
+        final existing = _activeContacts[pair];
+        if (existing != null) {
+          existing.contacts = List.unmodifiable(value.contacts);
+        }
+        _collisionEvents.add(value);
+      case GlintContactEnded value:
+        final existing = _activeContacts[pair];
+        if (existing == null) return;
+        existing.references--;
+        if (existing.references <= 0) {
+          _activeContacts.remove(pair);
+          _collisionEvents.add(value);
+        }
+      case GlintTriggerEntered value:
+        final references = _activeTriggers[pair] ?? 0;
+        _activeTriggers[pair] = references + 1;
+        if (references == 0) _collisionEvents.add(value);
+      case GlintTriggerExited value:
+        final references = _activeTriggers[pair];
+        if (references == null) return;
+        if (references <= 1) {
+          _activeTriggers.remove(pair);
+          _collisionEvents.add(value);
+        } else {
+          _activeTriggers[pair] = references - 1;
+        }
+    }
+  }
+
+  /// Backend hook called before a collider is destroyed. It prevents stale
+  /// contact and trigger entries when the native backend cannot report an end
+  /// event for a shape whose handle has already been released.
+  void forgetColliderFromPhysics(GlintColliderHandle collider) {
+    if (_collisionEventsDisposed) return;
+    final contacts = _activeContacts.keys
+        .where(
+          (pair) => identical(pair.a, collider) || identical(pair.b, collider),
+        )
+        .toList();
+    for (final pair in contacts) {
+      _activeContacts.remove(pair);
+      _collisionEvents.add(GlintContactEnded(pair.a, pair.b));
+    }
+    final triggers = _activeTriggers.keys
+        .where(
+          (pair) => identical(pair.a, collider) || identical(pair.b, collider),
+        )
+        .toList();
+    for (final pair in triggers) {
+      _activeTriggers.remove(pair);
+      _collisionEvents.add(GlintTriggerExited(pair.a, pair.b));
+    }
+  }
+
+  void _emitPersistentContacts() {
+    for (final contact in _activeContacts.values) {
+      if (contact.beganAtStep >= _simulationStep) continue;
+      final snapshot = contact.snapshot(_simulationStep, fixedTimeStep);
+      _collisionEvents.add(
+        GlintContactStayed(
+          snapshot.colliderA,
+          snapshot.colliderB,
+          snapshot.contacts,
+          steps: snapshot.steps,
+          duration: snapshot.duration,
+        ),
+      );
+    }
+  }
+
+  /// Backend disposal hook for the shared collision stream and contact state.
+  void disposePhysicsState() {
+    if (_collisionEventsDisposed) return;
+    _collisionEventsDisposed = true;
+    _activeContacts.clear();
+    _activeTriggers.clear();
+    _fixedStepCallbacks.clear();
+    _stepCompletedCallbacks.clear();
+    _snapshotParticipants.clear();
+    unawaited(_collisionEvents.close());
   }
 
   GlintPhysicsRayHit? raycast(
@@ -707,3 +929,42 @@ abstract class GlintPhysicsWorld {
 
 bool _finiteVector(Vector3 value) =>
     value.x.isFinite && value.y.isFinite && value.z.isFinite;
+
+class _GlintColliderPair {
+  const _GlintColliderPair(this.a, this.b);
+
+  final GlintColliderHandle a;
+  final GlintColliderHandle b;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _GlintColliderPair &&
+      ((identical(a, other.a) && identical(b, other.b)) ||
+          (identical(a, other.b) && identical(b, other.a)));
+
+  @override
+  int get hashCode => identityHashCode(a) ^ identityHashCode(b);
+}
+
+class _TrackedContact {
+  _TrackedContact({
+    required this.pair,
+    required this.contacts,
+    required this.beganAtStep,
+  });
+
+  final _GlintColliderPair pair;
+  List<GlintContactPoint> contacts;
+  final int beganAtStep;
+  int references = 1;
+
+  GlintActiveContact snapshot(int currentStep, double fixedTimeStep) =>
+      GlintActiveContact(
+        colliderA: pair.a,
+        colliderB: pair.b,
+        contacts: contacts,
+        beganAtStep: beganAtStep,
+        currentStep: currentStep,
+        fixedTimeStep: fixedTimeStep,
+      );
+}

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -105,6 +104,119 @@ void main() {
     expect(portableResult.deterministic, isTrue);
   });
 
+  test(
+    'contacts persist across fixed steps and report profiling data',
+    () async {
+      final world = _DeterministicWorld(fixedTimeStep: .1);
+      final a = world.createBody(const GlintRigidBodyConfig());
+      final b = world.createBody(const GlintRigidBodyConfig());
+      final colliderA = a.addCollider(const GlintSphereCollider(1));
+      final colliderB = b.addCollider(const GlintSphereCollider(1));
+      final events = <GlintCollisionEvent>[];
+      final subscription = world.collisions.listen(events.add);
+      GlintPhysicsStepStatistics? statistics;
+      world.addStepCompletedCallback((value) => statistics = value);
+
+      world.emitCollisionEvent(
+        GlintContactBegan(colliderA, colliderB, const [
+          GlintContactPoint(
+            position: Vector3.zero,
+            normal: Vector3(0, 1, 0),
+            impulse: 2,
+            separation: -.01,
+          ),
+        ]),
+      );
+      world.stepFixed();
+      expect(world.activeContacts.single.steps, 1);
+      expect(statistics?.activeContactCount, 1);
+      expect(statistics?.bodyCount, 2);
+      world.stepFixed();
+      expect(events.whereType<GlintContactStayed>().single.steps, 2);
+
+      world.emitCollisionEvent(GlintContactEnded(colliderB, colliderA));
+      expect(world.activeContacts, isEmpty);
+      expect(events.last, isA<GlintContactEnded>());
+      await subscription.cancel();
+      world.dispose();
+    },
+  );
+
+  test('character motor accelerates, grounds, and jumps', () {
+    final world = _GroundWorld(fixedTimeStep: .1);
+    final character = GlintCharacterController.create(
+      world: world,
+      position: const Vector3(0, .9, 0),
+      config: const GlintCharacterControllerConfig(
+        groundAcceleration: 100,
+        airAcceleration: 100,
+      ),
+    );
+    character.desiredVelocity = const Vector3(2, 5, 0);
+
+    world.stepFixed();
+    expect(character.isGrounded, isTrue);
+    expect(character.body.position.x, closeTo(.2, 1e-9));
+    expect(character.velocity.y, closeTo(0, 1e-9));
+    expect(character.jump(4), isTrue);
+    world.stepFixed();
+    expect(character.isGrounded, isFalse);
+    expect(character.body.position.y, greaterThan(.9));
+
+    character.dispose();
+    world.dispose();
+  });
+
+  test('ragdolls map physics bodies back into a partial skeletal pose', () {
+    const rig = GlintGlbRig(
+      nodes: [
+        GlintGlbNode(name: 'root', children: [1]),
+        GlintGlbNode(name: 'hand', translation: [0, 1, 0]),
+      ],
+      rootNodes: [0],
+      meshes: [],
+      animations: [],
+    );
+    final world = _DeterministicWorld(fixedTimeStep: .1);
+    final ragdoll = GlintRagdoll.create(
+      world: world,
+      rig: rig,
+      simulated: false,
+      definition: const GlintRagdollDefinition(
+        parts: [
+          GlintRagdollPart(
+            id: 'root',
+            nodeName: 'root',
+            collider: GlintSphereCollider(.2),
+          ),
+          GlintRagdollPart(
+            id: 'hand',
+            nodeName: 'hand',
+            collider: GlintSphereCollider(.1),
+          ),
+        ],
+        constraints: [
+          GlintRagdollConstraint(
+            parentPart: 'root',
+            childPart: 'hand',
+            type: GlintRagdollJointType.fixed,
+          ),
+        ],
+      ),
+    );
+    ragdoll
+        .body('hand')
+        .setTransform(const Vector3(2, 1, 0), GlintQuaternion.identity);
+
+    final pose = ragdoll.poseFromPhysics(rig.bindPose());
+
+    expect(pose.nodes[1].translation.x, closeTo(2, 1e-9));
+    expect(pose.nodes[1].translation.y, closeTo(1, 1e-9));
+    expect(pose.trsNodes, containsAll([0, 1]));
+    ragdoll.dispose();
+    world.dispose();
+  });
+
   test('quaternion transforms rotate without Euler conversion', () {
     final orientation = GlintQuaternion.axisAngle(
       const Vector3(0, 1, 0),
@@ -128,8 +240,6 @@ class _RecordingWorld extends GlintPhysicsWorld {
   String get backendName => 'test';
   @override
   List<GlintRigidBody> get bodies => const [];
-  @override
-  Stream<GlintCollisionEvent> get collisions => const Stream.empty();
   @override
   GlintRigidBody createBody(GlintRigidBodyConfig config) =>
       throw UnimplementedError();
@@ -190,8 +300,6 @@ class _DeterministicWorld extends GlintPhysicsWorld {
   @override
   List<GlintRigidBody> get bodies => List.unmodifiable(_bodies);
   @override
-  Stream<GlintCollisionEvent> get collisions => const Stream.empty();
-  @override
   GlintRigidBody createBody(GlintRigidBodyConfig config) {
     final body = _FakeBody(config);
     _bodies.add(body);
@@ -199,13 +307,13 @@ class _DeterministicWorld extends GlintPhysicsWorld {
   }
 
   @override
-  GlintJoint createJoint(GlintJointConfig config) => throw UnimplementedError();
+  GlintJoint createJoint(GlintJointConfig config) => _FakeJoint();
   @override
   void updateBackendGravity(Vector3 gravity) {}
   @override
   void stepBackend(double fixedTimeStep, int solverSubSteps) {
     for (final body in _bodies) {
-      if (body.type == GlintBodyType.dynamic && !body.isSleeping) {
+      if (body.type != GlintBodyType.static && !body.isSleeping) {
         body.setTransform(
           body.position + body.linearVelocity * fixedTimeStep,
           body.orientation,
@@ -251,7 +359,67 @@ class _DeterministicWorld extends GlintPhysicsWorld {
     GlintQueryFilter filter = const GlintQueryFilter(),
   }) => null;
   @override
-  void dispose() => _bodies.clear();
+  void dispose() {
+    disposePhysicsState();
+    _bodies.clear();
+  }
+}
+
+class _GroundWorld extends _DeterministicWorld {
+  _GroundWorld({required super.fixedTimeStep}) {
+    _ground = createBody(
+      const GlintRigidBodyConfig(type: GlintBodyType.static),
+    );
+    _groundCollider = _ground.addCollider(
+      const GlintBoxCollider(Vector3(100, .1, 100)),
+    );
+  }
+
+  late final GlintRigidBody _ground;
+  late final GlintColliderHandle _groundCollider;
+
+  @override
+  GlintPhysicsRayHit? raycast(
+    GlintRay ray, {
+    double maxDistance = double.infinity,
+    GlintQueryFilter filter = const GlintQueryFilter(),
+  }) {
+    if (ray.direction.y >= -1e-9) return null;
+    final distance = ray.origin.y / -ray.direction.y;
+    if (distance < 0 || distance > maxDistance) return null;
+    final hit = ray.origin + ray.direction * distance;
+    return GlintPhysicsRayHit(
+      body: _ground,
+      collider: _groundCollider,
+      position: Vector3(hit.x, 0, hit.z),
+      normal: const Vector3(0, 1, 0),
+      distance: distance,
+    );
+  }
+
+  @override
+  GlintPhysicsRayHit? shapeCast(
+    GlintCollider collider,
+    Vector3 origin,
+    Vector3 direction, {
+    GlintQuaternion orientation = GlintQuaternion.identity,
+    double maxDistance = double.infinity,
+    GlintQueryFilter filter = const GlintQueryFilter(),
+  }) {
+    if (collider is! GlintSphereCollider || direction.y >= -1e-9) return null;
+    final height = origin.y - collider.radius;
+    if (height < -1e-9) return null;
+    final distance = height / -direction.normalized.y;
+    if (distance > maxDistance) return null;
+    final centerAtHit = origin + direction.normalized * distance;
+    return GlintPhysicsRayHit(
+      body: _ground,
+      collider: _groundCollider,
+      position: Vector3(centerAtHit.x, 0, centerAtHit.z),
+      normal: const Vector3(0, 1, 0),
+      distance: distance.clamp(0, maxDistance).toDouble(),
+    );
+  }
 }
 
 class _FakeBody extends GlintRigidBody {
@@ -346,7 +514,49 @@ class _FakeBody extends GlintRigidBody {
     int collisionMask = 0x7fffffff,
     bool isTrigger = false,
     Object? userData,
-  }) => throw UnimplementedError();
+  }) => _FakeCollider(
+    body: this,
+    collider: collider,
+    material: material,
+    isTrigger: isTrigger,
+    collisionLayer: collisionLayer,
+    collisionMask: collisionMask,
+    userData: userData,
+  );
+  @override
+  void destroy() {}
+}
+
+class _FakeCollider implements GlintColliderHandle {
+  const _FakeCollider({
+    required this.body,
+    required this.collider,
+    required this.material,
+    required this.isTrigger,
+    required this.collisionLayer,
+    required this.collisionMask,
+    required this.userData,
+  });
+
+  @override
+  final GlintRigidBody body;
+  @override
+  final GlintCollider collider;
+  @override
+  final GlintPhysicsMaterial material;
+  @override
+  final bool isTrigger;
+  @override
+  final int collisionLayer;
+  @override
+  final int collisionMask;
+  @override
+  final Object? userData;
+  @override
+  void destroy() {}
+}
+
+class _FakeJoint implements GlintJoint {
   @override
   void destroy() {}
 }

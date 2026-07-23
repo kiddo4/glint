@@ -5,7 +5,9 @@ It provides real angular rigid bodies, CCD, sleeping, compound and cooked
 colliders, five joint families, collision/trigger events, spatial queries,
 fixed-step interpolation, and query filters that can exclude individual
 bodies. Glint's backend-neutral snapshots, replay verification, and stress
-runner work with this backend without Box3D-specific gameplay code.
+runner work with this backend without Box3D-specific gameplay code. Shape
+casts honor body, trigger, and body-type exclusions even though the underlying
+single-hit native query cannot skip a rejected first hit.
 
 ```dart
 await GlintBox3dWorld.ensureInitialized();
@@ -20,8 +22,9 @@ body.addCollider(
 ```
 
 `GlintRaycastVehicle` lives in `glint_engine`, consumes only the portable
-contract, and is optional. The backend itself is suitable for any 3D game or
-interactive simulation.
+contract, and is optional. The same is true of `GlintCharacterController` and
+`GlintRagdoll`; the backend itself is suitable for any 3D game or interactive
+simulation.
 
 ## Stress benchmark
 

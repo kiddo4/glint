@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -27,8 +26,7 @@ class GlintBox3dWorld extends GlintPhysicsWorld {
   final b3.Box3dWorld _native;
   final List<_Box3dBody> _bodies = [];
   final Map<int, _Box3dCollider> _colliders = {};
-  final StreamController<GlintCollisionEvent> _events =
-      StreamController<GlintCollisionEvent>.broadcast();
+  final Set<_Box3dCollider> _triggerColliders = {};
   bool _disposed = false;
 
   @override
@@ -36,9 +34,6 @@ class GlintBox3dWorld extends GlintPhysicsWorld {
 
   @override
   List<GlintRigidBody> get bodies => List.unmodifiable(_bodies);
-
-  @override
-  Stream<GlintCollisionEvent> get collisions => _events.stream;
 
   @override
   GlintRigidBody createBody(GlintRigidBodyConfig config) {
@@ -136,12 +131,15 @@ class GlintBox3dWorld extends GlintPhysicsWorld {
   }
 
   void _register(_Box3dCollider collider) {
+    if (collider.isTrigger) _triggerColliders.add(collider);
     for (final shape in collider._shapes) {
       _colliders[shape.handle] = collider;
     }
   }
 
   void _forget(_Box3dCollider collider) {
+    forgetColliderFromPhysics(collider);
+    _triggerColliders.remove(collider);
     for (final shape in collider._shapes) {
       _colliders.remove(shape.handle);
     }
@@ -173,7 +171,7 @@ class GlintBox3dWorld extends GlintPhysicsWorld {
       final a = _colliders[event.shapeA];
       final b = _colliders[event.shapeB];
       if (a == null || b == null) continue;
-      _events.add(
+      emitCollisionEvent(
         GlintContactBegan(a, b, [
           for (final point in event.points)
             GlintContactPoint(
@@ -188,17 +186,21 @@ class GlintBox3dWorld extends GlintPhysicsWorld {
     for (final event in events.contactEnded) {
       final a = _colliders[event.shapeA];
       final b = _colliders[event.shapeB];
-      if (a != null && b != null) _events.add(GlintContactEnded(a, b));
+      if (a != null && b != null) emitCollisionEvent(GlintContactEnded(a, b));
     }
     for (final event in events.sensorBegan) {
       final a = _colliders[event.sensorShape];
       final b = _colliders[event.visitorShape];
-      if (a != null && b != null) _events.add(GlintTriggerEntered(a, b));
+      if (a != null && b != null) {
+        emitCollisionEvent(GlintTriggerEntered(a, b));
+      }
     }
     for (final event in events.sensorEnded) {
       final a = _colliders[event.sensorShape];
       final b = _colliders[event.visitorShape];
-      if (a != null && b != null) _events.add(GlintTriggerExited(a, b));
+      if (a != null && b != null) {
+        emitCollisionEvent(GlintTriggerExited(a, b));
+      }
     }
   }
 
@@ -303,37 +305,82 @@ class GlintBox3dWorld extends GlintPhysicsWorld {
     GlintQueryFilter filter = const GlintQueryFilter(),
   }) {
     final distance = maxDistance.isFinite ? maxDistance : 1e6;
-    final hit = switch (collider) {
-      GlintSphereCollider value => _native.shapeCastSphere(
-        _nativeVector(origin),
-        value.radius,
-        _nativeVector(direction),
-        maxDistance: distance,
-        mask: filter.layerMask,
-      ),
-      GlintBoxCollider value => _native.shapeCastBox(
-        _nativeVector(origin),
-        _nativeVector(value.halfExtents),
-        _nativeVector(direction),
-        rotation: _nativeQuaternion(orientation),
-        maxDistance: distance,
-        mask: filter.layerMask,
-      ),
-      _ => throw UnsupportedError(
-        'Box3D shape casts currently support sphere and box probes.',
-      ),
-    };
+    // The native single-hit cast cannot skip a rejected closest shape. Hide
+    // excluded body/trigger/type shapes for the duration of the synchronous
+    // query, then restore their authored filters before simulation resumes.
+    final hit = _withQueryFilter(filter, () {
+      return switch (collider) {
+        GlintSphereCollider value => _native.shapeCastSphere(
+          _nativeVector(origin),
+          value.radius,
+          _nativeVector(direction),
+          maxDistance: distance,
+          mask: filter.layerMask,
+        ),
+        GlintBoxCollider value => _native.shapeCastBox(
+          _nativeVector(origin),
+          _nativeVector(value.halfExtents),
+          _nativeVector(direction),
+          rotation: _nativeQuaternion(orientation),
+          maxDistance: distance,
+          mask: filter.layerMask,
+        ),
+        _ => throw UnsupportedError(
+          'Box3D shape casts currently support sphere and box probes.',
+        ),
+      };
+    });
     return hit == null ? null : _resolve(hit, filter);
+  }
+
+  T _withQueryFilter<T>(GlintQueryFilter filter, T Function() query) {
+    final hidden = <_Box3dCollider>{};
+    for (final body in filter.excludedBodies) {
+      if (body is _Box3dBody && identical(body._world, this)) {
+        hidden.addAll(body._ownedColliders);
+      }
+    }
+    if (!filter.includeTriggers) hidden.addAll(_triggerColliders);
+    if (!filter.includeStatic ||
+        !filter.includeKinematic ||
+        !filter.includeDynamic) {
+      for (final body in _bodies) {
+        final include = switch (body.type) {
+          GlintBodyType.static => filter.includeStatic,
+          GlintBodyType.dynamic => filter.includeDynamic,
+          GlintBodyType.kinematic => filter.includeKinematic,
+        };
+        if (!include) hidden.addAll(body._ownedColliders);
+      }
+    }
+    for (final collider in hidden) {
+      for (final shape in collider._shapes) {
+        shape.setCollisionFilter(category: 0, mask: 0);
+      }
+    }
+    try {
+      return query();
+    } finally {
+      for (final collider in hidden) {
+        for (final shape in collider._shapes) {
+          shape.setCollisionFilter(
+            category: collider.collisionLayer,
+            mask: collider.collisionMask,
+          );
+        }
+      }
+    }
   }
 
   @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _events.close();
+    disposePhysicsState();
     _native.dispose();
     _bodies.clear();
     _colliders.clear();
+    _triggerColliders.clear();
   }
 }
 
@@ -425,6 +472,7 @@ class _Box3dBody extends GlintRigidBody {
       _nativeVector(position),
       _nativeQuaternion(orientation),
     );
+    if (_type == GlintBodyType.dynamic) _native.wakeUp();
     _previousPosition = _currentPosition = position;
     _previousOrientation = _currentOrientation = orientation;
   }

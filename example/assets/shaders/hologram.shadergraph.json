@@ -1,0 +1,73 @@
+{
+  "nodes": [
+    { "id": "uv", "type": "uv" },
+    { "id": "time", "type": "time" },
+    { "id": "base", "type": "baseTexture" },
+    {
+      "id": "tint",
+      "type": "parameter",
+      "properties": { "name": "tint", "default": [0.08, 0.75, 1.0, 1.0] }
+    },
+    {
+      "id": "tinted",
+      "type": "multiply",
+      "inputs": { "a": "base", "b": "tint" }
+    },
+    {
+      "id": "fresnelPower",
+      "type": "constant",
+      "properties": { "value": 3.0 }
+    },
+    {
+      "id": "rim",
+      "type": "fresnel",
+      "inputs": { "power": "fresnelPower" }
+    },
+    {
+      "id": "scroll",
+      "type": "combine2",
+      "inputs": { "x": "time", "y": "time" }
+    },
+    {
+      "id": "animatedUv",
+      "type": "add",
+      "inputs": { "a": "uv", "b": "scroll" }
+    },
+    {
+      "id": "noise",
+      "type": "noise2d",
+      "inputs": { "uv": "animatedUv" }
+    },
+    {
+      "id": "rimNoise",
+      "type": "add",
+      "inputs": { "a": "rim", "b": "noise" }
+    },
+    {
+      "id": "emissiveTint",
+      "type": "constant",
+      "properties": { "value": [0.0, 0.75, 1.0] }
+    },
+    {
+      "id": "emissive",
+      "type": "multiply",
+      "inputs": { "a": "emissiveTint", "b": "rimNoise" }
+    },
+    {
+      "id": "metallic",
+      "type": "constant",
+      "properties": { "value": 0.35 }
+    },
+    {
+      "id": "roughness",
+      "type": "parameter",
+      "properties": { "name": "roughness", "default": 0.25 }
+    }
+  ],
+  "output": {
+    "baseColor": "tinted",
+    "emissive": "emissive",
+    "metallic": "metallic",
+    "roughness": "roughness"
+  }
+}
