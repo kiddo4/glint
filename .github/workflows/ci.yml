@@ -30,7 +30,10 @@ jobs:
       - name: Check formatting (informational)
         continue-on-error: true
         run: dart format --output=none --set-exit-if-changed .
-      - run: flutter analyze
+      # Scope to the engine's own sources: `flutter analyze` recurses into
+      # packages/* and example/, which are separate packages resolved by their
+      # own jobs below. Analyzing them here would fail on unresolved deps.
+      - run: flutter analyze lib test bin tool
       - run: flutter test
 
   example:
