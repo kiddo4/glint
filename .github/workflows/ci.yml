@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Required check for merging into main (see branch protection).
+  engine:
+    name: engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter --version
+      - run: flutter pub get
+      # Informational only: the codebase is not fully `dart format`-clean yet,
+      # so this reports formatting drift without blocking the merge. Flip to a
+      # blocking gate once the tree is formatted.
+      - name: Check formatting (informational)
+        continue-on-error: true
+        run: dart format --output=none --set-exit-if-changed .
+      # Scope to the engine's own sources: `flutter analyze` recurses into
+      # packages/* and example/, which are separate packages resolved by their
+      # own jobs below. Analyzing them here would fail on unresolved deps.
+      - run: flutter analyze lib test bin tool
+      - run: flutter test
+
+  example:
+    name: example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - working-directory: example
+        run: flutter pub get
+      - working-directory: example
+        run: flutter analyze
+
+  packages:
+    name: package (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [glint_basis, glint_box3d, glint_soloud]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - working-directory: packages/${{ matrix.package }}
+        run: flutter pub get
+      # Analyze only: the native backends (glint_box3d/glint_soloud) need a
+      # platform toolchain to build native assets, which headless CI doesn't
+      # provision. Their runtime suites run locally per CONTRIBUTING.md.
+      - working-directory: packages/${{ matrix.package }}
+        run: flutter analyze
