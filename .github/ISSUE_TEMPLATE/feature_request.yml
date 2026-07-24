@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest something Glint should support.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: What are you building?
+      description: Real use cases shape the roadmap — tell us what you're trying to do.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Glint to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: How are you handling this today, if at all?
+    validations:
+      required: false

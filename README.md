@@ -7,6 +7,7 @@
 <p align="center"><b>A Flutter-first 3D engine built on Flutter GPU.</b></p>
 
 <p align="center">
+  <a title="CI" href="https://github.com/kiddo4/glint/actions/workflows/ci.yml"><img src="https://github.com/kiddo4/glint/actions/workflows/ci.yml/badge.svg"/></a>
   <a title="Pub" href="https://pub.dev/packages/glint_engine"><img src="https://img.shields.io/pub/v/glint_engine.svg?style=popout"/></a>
   <a title="Pub points" href="https://pub.dev/packages/glint_engine/score"><img src="https://img.shields.io/pub/points/glint_engine"/></a>
   <a title="License" href="LICENSE"><img src="https://img.shields.io/github/license/kiddo4/glint"/></a>

@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in Glint isn't working as expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps or a small code snippet that reproduces the issue.
+    validations:
+      required: true
+  - type: input
+    id: glint-version
+    attributes:
+      label: Glint version
+      placeholder: e.g. 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `flutter doctor -v`, plus device/OS and whether Flutter GPU is enabled.
+    validations:
+      required: true

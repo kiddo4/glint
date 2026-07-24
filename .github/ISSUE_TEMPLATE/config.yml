@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation & FAQ
+    url: https://glint.kiddobuild.dev
+    about: Check the website, API docs, and FAQ before filing an issue.
+  - name: Roadmap
+    url: https://github.com/kiddo4/glint/blob/main/ROADMAP.md
+    about: See what's planned and what's intentionally out of scope.
