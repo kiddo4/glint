@@ -1,3 +1,13 @@
+## 0.3.0
+
+* Add `GlintGameInstance.baseColorImage`: bind a live `ui.Image` as an
+  instance's base-color texture. The image is wrapped rather than copied —
+  Flutter GPU adopts the texture already backing it — so a per-frame feed
+  (camera preview, video frame, or a widget subtree captured through
+  `RepaintBoundary.toImage`) costs no upload. Images that are not GPU-backed
+  are skipped with a debug warning and the model's own texture is drawn
+  instead, so a bad frame degrades rather than tearing down the scene.
+
 ## 0.2.1
 
 * Migrate the Flutter GPU backend to the current `flutter_gpu` API so Glint

@@ -71,6 +71,7 @@ class GlintGameInstance {
     required this.model,
     this.transform = const Transform3D(),
     this.material,
+    this.baseColorImage,
     this.shaderMaterial,
     this.translucent = false,
     this.animationIndex = 0,
@@ -89,6 +90,25 @@ class GlintGameInstance {
 
   /// Overrides the model's authored material for this instance only.
   final Material3D? material;
+
+  /// A live image bound as this instance's base-color texture, replacing the
+  /// model's authored one.
+  ///
+  /// The image is *wrapped*, not copied: Flutter GPU adopts the texture already
+  /// backing the [ui.Image], so a per-frame feed — a camera preview, a video
+  /// frame, a widget subtree captured through `RepaintBoundary.toImage` — costs
+  /// no upload. Pass a new image each frame; the wrapper is rebuilt only when
+  /// the image identity changes.
+  ///
+  /// The image must be GPU-backed. `RepaintBoundary.toImage` qualifies;
+  /// `toImageSync` does not, and neither do CPU-decoded images. A
+  /// non-conforming image is skipped (with a debug-mode warning) and the
+  /// model's own texture is drawn instead, so one bad frame degrades rather
+  /// than tearing down the scene.
+  ///
+  /// Ownership stays with the caller: dispose the image once the frame that
+  /// used it has been submitted.
+  final ui.Image? baseColorImage;
 
   /// Optional build-time shader graph material. It keeps the authored base
   /// material and texture available to the graph while replacing the standard
@@ -497,6 +517,39 @@ class _GlintGameViewState extends State<GlintGameView>
     );
   }
 
+  /// The image most recently wrapped for [GlintGameInstance.baseColorImage],
+  /// and its wrapper. A live feed hands over a new image every frame while a
+  /// single frame may draw the same image across several submeshes, so one
+  /// slot both avoids re-wrapping within a frame and drops the previous
+  /// wrapper as soon as the feed advances.
+  ui.Image? _liveImage;
+  gpu.Texture? _liveTexture;
+
+  /// Wraps [image]'s backing GPU texture, or returns null when it has none.
+  ///
+  /// [gpu.Texture.fromImage] adopts the existing texture rather than copying
+  /// pixels, which is what makes a per-frame camera or widget feed viable. It
+  /// throws for images that are not GPU-backed (notably anything from
+  /// `toImageSync`), and that must not take the frame down with it.
+  gpu.Texture? _resolveLiveTexture(gpu.GpuContext context, ui.Image image) {
+    if (identical(_liveImage, image)) return _liveTexture;
+    gpu.Texture? texture;
+    try {
+      texture = gpu.Texture.fromImage(context, image);
+    } catch (error) {
+      assert(() {
+        debugPrint(
+          'Glint: baseColorImage could not be wrapped as a GPU texture and was '
+          'skipped — $error',
+        );
+        return true;
+      }());
+      texture = null;
+    }
+    _liveImage = image;
+    return _liveTexture = texture;
+  }
+
   Future<ui.Image> _render(GlintGameFrame frame) async {
     try {
       final stopwatch = Stopwatch()..start();
@@ -812,9 +865,15 @@ class _GlintGameViewState extends State<GlintGameView>
             );
             drawCalls++;
             triangles += submesh.indexCount ~/ 3;
+            // A live image overrides the authored base color texture; if it
+            // could not be wrapped, fall back rather than dropping the draw.
+            final liveImage = instance.baseColorImage;
+            final baseColorTexture = liveImage == null
+                ? submesh.texture
+                : _resolveLiveTexture(context, liveImage) ?? submesh.texture;
             pass.bindTexture(
               geometryPipeline.fragmentShader.getUniformSlot('tex'),
-              submesh.texture,
+              baseColorTexture,
               sampler: gpu.SamplerOptions(
                 minFilter: gpu.MinMagFilter.linear,
                 magFilter: gpu.MinMagFilter.linear,

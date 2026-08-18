@@ -470,6 +470,35 @@ cd glint/example
 flutter run   # manifests already carry the GPU flags
 ```
 
+## Live textures
+
+Any GPU-backed `ui.Image` can be bound as an instance's base-color texture, and
+it is *wrapped* rather than copied — Flutter GPU adopts the texture already
+behind the image, so a per-frame feed costs no upload:
+
+```dart
+GlintGameInstance(
+  model: 'screen',
+  transform: screenTransform,
+  baseColorImage: latestFrame,   // a new ui.Image each frame
+)
+```
+
+Frames can come from anywhere that yields a GPU-backed image: a camera or video
+plugin, or a widget subtree captured with `RepaintBoundary.toImage` — which is
+how you put live Flutter UI onto a surface in the scene.
+
+Two things to know. The image must come from the asynchronous
+`RepaintBoundary.toImage`; `toImageSync` and CPU-decoded images have no GPU
+texture to adopt, and are skipped with a debug warning rather than taking the
+frame down. And the mesh needs UVs authored for it — geometry UV-mapped into a
+shared colour atlas (most kit assets) will sample a few pixels of that atlas
+magnified across the surface, so use a quad whose UVs span 0..1.
+
+Textures registered through Flutter's `TextureRegistry` — Android
+`SurfaceTexture`, iOS `CVPixelBuffer`, what the `Texture` widget draws — cannot
+be imported into Flutter GPU yet. That is an upstream gap, not a Glint one.
+
 ## Gesture routing in scrollable pages
 
 Inside a `ListView`, pass `gestureMode: GlintGestureMode.scrollAware`:
