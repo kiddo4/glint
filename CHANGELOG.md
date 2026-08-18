@@ -1,3 +1,15 @@
+## 0.2.1
+
+* Migrate the Flutter GPU backend to the current `flutter_gpu` API so Glint
+  builds on recent Flutter master SDKs again. Vertex and index counts moved
+  from `bindVertexBuffer`/`bindIndexBuffer` to `draw`/`drawIndexed`,
+  `RenderPass.draw` now takes an explicit vertex count, and
+  `TextureCoordinateSystem` was removed upstream.
+* Load shader bundles through the now-asynchronous `ShaderLibrary.fromAsset`.
+  `GlintGameView` resolves its engine and shader-graph libraries once at the
+  top of each frame and caches them, so the per-instance draw loop stays
+  synchronous.
+
 ## 0.2.0
 
 * Complete skeletal skinning handoff: render static skins through their rig,
