@@ -1,3 +1,29 @@
+## 0.2.1
+
+* Migrate the Flutter GPU backend to the current `flutter_gpu` API so Glint
+  builds on recent Flutter master SDKs again. Vertex and index counts moved
+  from `bindVertexBuffer`/`bindIndexBuffer` to `draw`/`drawIndexed`,
+  `RenderPass.draw` now takes an explicit vertex count, and
+  `TextureCoordinateSystem` was removed upstream.
+* Load shader bundles through the now-asynchronous `ShaderLibrary.fromAsset`.
+  `GlintGameView` resolves its engine and shader-graph libraries once at the
+  top of each frame and caches them, so the per-instance draw loop stays
+  synchronous.
+* Recompile `shaders/glint.shaderbundle` with the current `impellerc`. Impeller
+  now requires shader bundle format version 2 and rejects the version 1 bundle
+  that 0.2.0 shipped with, so the engine failed at `ShaderLibrary` init on
+  recent SDKs even once the Dart API changes were in place.
+* Fix `Label3D` anchors never appearing on a static scene. The model metadata
+  labels project through only becomes available after the first asynchronous
+  render, and the only `setState` in the GPU viewport is the render scheduler,
+  so nothing rebuilt the label layer once it landed. Anchored widgets stayed
+  invisible until a gesture or an `autoRotate` tick happened to rebuild —
+  which meant they never showed at all through `Scene3D`, where `autoRotate`
+  defaults to false.
+* Await the decode in `GlintTexturePixels.fromAsset` so a failure is wrapped as
+  a `GlintTextureException` instead of escaping the surrounding try block
+  unwrapped.
+
 ## 0.2.0
 
 * Complete skeletal skinning handoff: render static skins through their rig,

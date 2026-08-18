@@ -220,7 +220,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         gpu.StorageMode.hostVisible,
         width,
         height,
-        coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
         enableRenderTargetUsage: false,
       );
       texture.overwrite(bytes);
@@ -368,10 +367,10 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     );
   }
 
-  gpu.RenderPipeline _obtainPipeline(gpu.GpuContext context) {
+  Future<gpu.RenderPipeline> _obtainPipeline(gpu.GpuContext context) async {
     final cached = _pipeline;
     if (cached != null) return cached;
-    final library = gpu.ShaderLibrary.fromAsset(
+    final library = await gpu.ShaderLibrary.fromAsset(
       'packages/glint_engine/shaders/glint.shaderbundle',
     );
     if (library == null) {
@@ -385,10 +384,10 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
     return _pipeline = context.createRenderPipeline(vertex, fragment);
   }
 
-  gpu.RenderPipeline _obtainShadowPipeline(gpu.GpuContext context) {
+  Future<gpu.RenderPipeline> _obtainShadowPipeline(gpu.GpuContext context) async {
     final cached = _shadowPipeline;
     if (cached != null) return cached;
-    final library = gpu.ShaderLibrary.fromAsset(
+    final library = await gpu.ShaderLibrary.fromAsset(
       'packages/glint_engine/shaders/glint.shaderbundle',
     );
     if (library == null) {
@@ -471,9 +470,21 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       // unhandled async error.
       final prepared = await _asset;
       final context = gpu.gpuContext;
+      // Labels project through _prepared, which only becomes available here —
+      // after the build that laid them out. Without a rebuild once it lands,
+      // every _buildLabel call keeps returning null and anchored widgets stay
+      // invisible until something else rebuilds the widget (a gesture, or an
+      // autoRotate tick). Scene3D defaults autoRotate to false, so a static
+      // scene showed no labels at all.
+      final hadPrepared = _prepared != null;
       _prepared = prepared;
+      if (!hadPrepared && widget.labels.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
+      }
       final mesh = prepared.mesh;
-      final pipeline = _obtainPipeline(context);
+      final pipeline = await _obtainPipeline(context);
       final texture = context.createTexture(
         gpu.StorageMode.devicePrivate,
         widget.width,
@@ -510,7 +521,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         radius: boundsExtent.length / 2,
       );
       if (widget.enableShadows) {
-        final shadowPipeline = _obtainShadowPipeline(context);
+        final shadowPipeline = await _obtainShadowPipeline(context);
         final shadowColorTexture = context.createTexture(
           gpu.StorageMode.devicePrivate,
           kShadowMapSize,
@@ -550,7 +561,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             offsetInBytes: 0,
             lengthInBytes: prepared.vertexByteLength,
           ),
-          mesh.vertexCount,
         );
         shadowPass.bindIndexBuffer(
           gpu.BufferView(
@@ -559,7 +569,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             lengthInBytes: prepared.indexByteLength,
           ),
           prepared.indexType,
-          mesh.indices.length,
         );
         shadowPass.bindUniform(
           shadowPipeline.vertexShader.getUniformSlot('ShadowDrawInfo'),
@@ -567,7 +576,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
             _floats((lightViewProjection * model as vm.Matrix4).storage),
           ),
         );
-        shadowPass.draw();
+        shadowPass.drawIndexed(mesh.indices.length);
         final shadowCompleter = Completer<void>();
         shadowCommandBuffer.submit(
           completionCallback: (success) {
@@ -613,7 +622,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
           offsetInBytes: 0,
           lengthInBytes: prepared.vertexByteLength,
         ),
-        mesh.vertexCount,
       );
       pass.bindIndexBuffer(
         gpu.BufferView(
@@ -622,7 +630,6 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
           lengthInBytes: prepared.indexByteLength,
         ),
         prepared.indexType,
-        mesh.indices.length,
       );
       final mvp = _modelViewProjection();
       final material = widget.material;
@@ -719,7 +726,7 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
         mvp.storage,
       ).intersectsBounds(prepared.boundsMinimum, prepared.boundsMaximum);
       if (visible) {
-        pass.draw();
+        pass.drawIndexed(mesh.indices.length);
       }
 
       final completer = Completer<void>();

@@ -234,6 +234,8 @@ class _GlintGameViewState extends State<GlintGameView>
   gpu.RenderPipeline? _skinnedPipeline;
   gpu.RenderPipeline? _particlePipeline;
   final Map<(String, String, bool), gpu.RenderPipeline> _graphPipelines = {};
+  gpu.ShaderLibrary? _library;
+  final Map<String, gpu.ShaderLibrary> _graphLibraries = {};
   bool _rendering = false;
   bool _failed = false;
 
@@ -338,7 +340,6 @@ class _GlintGameViewState extends State<GlintGameView>
         gpu.StorageMode.hostVisible,
         width,
         height,
-        coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
         enableRenderTargetUsage: false,
       );
       texture.overwrite(bytes);
@@ -399,14 +400,35 @@ class _GlintGameViewState extends State<GlintGameView>
     );
   }
 
+  /// Loads the engine shader bundle once. Awaited at the top of [_render] so
+  /// every pipeline getter below can stay synchronous.
+  Future<gpu.ShaderLibrary> _ensureLibrary() async {
+    final cached = _library;
+    if (cached != null) return cached;
+    final library = await gpu.ShaderLibrary.fromAsset('packages/glint_engine/shaders/glint.shaderbundle');
+    if (library == null) {
+      throw StateError('Glint shader bundle could not be loaded.');
+    }
+    return _library = library;
+  }
+
+  /// As [_ensureLibrary], for a shader graph bundle referenced by an instance.
+  Future<gpu.ShaderLibrary> _ensureGraphLibrary(String asset) async {
+    final cached = _graphLibraries[asset];
+    if (cached != null) return cached;
+    final library = await gpu.ShaderLibrary.fromAsset(asset);
+    if (library == null) {
+      throw StateError('Shader graph bundle "$asset" could not be loaded.');
+    }
+    return _graphLibraries[asset] = library;
+  }
+
   gpu.RenderPipeline _obtainPipeline(gpu.GpuContext context) {
     final cached = _pipeline;
     if (cached != null) return cached;
-    final library = gpu.ShaderLibrary.fromAsset(
-      'packages/glint_engine/shaders/glint.shaderbundle',
-    );
+    final library = _library;
     if (library == null) {
-      throw StateError('Glint shader bundle could not be loaded.');
+      throw StateError('Glint shader bundle has not been loaded yet.');
     }
     final vertex = library['UnlitVertex'];
     final fragment = library['UnlitFragment'];
@@ -419,11 +441,9 @@ class _GlintGameViewState extends State<GlintGameView>
   gpu.RenderPipeline _obtainSkinnedPipeline(gpu.GpuContext context) {
     final cached = _skinnedPipeline;
     if (cached != null) return cached;
-    final library = gpu.ShaderLibrary.fromAsset(
-      'packages/glint_engine/shaders/glint.shaderbundle',
-    );
+    final library = _library;
     if (library == null) {
-      throw StateError('Glint shader bundle could not be loaded.');
+      throw StateError('Glint shader bundle has not been loaded yet.');
     }
     final vertex = library['SkinnedUnlitVertex'];
     final fragment = library['UnlitFragment'];
@@ -436,11 +456,9 @@ class _GlintGameViewState extends State<GlintGameView>
   gpu.RenderPipeline _obtainParticlePipeline(gpu.GpuContext context) {
     final cached = _particlePipeline;
     if (cached != null) return cached;
-    final library = gpu.ShaderLibrary.fromAsset(
-      'packages/glint_engine/shaders/glint.shaderbundle',
-    );
+    final library = _library;
     if (library == null) {
-      throw StateError('Glint shader bundle could not be loaded.');
+      throw StateError('Glint shader bundle has not been loaded yet.');
     }
     final vertex = library['ParticleVertex'];
     final fragment = library['ParticleFragment'];
@@ -458,10 +476,10 @@ class _GlintGameViewState extends State<GlintGameView>
     final key = (material.bundleAsset, material.fragmentEntry, skinned);
     final cached = _graphPipelines[key];
     if (cached != null) return cached;
-    final graphLibrary = gpu.ShaderLibrary.fromAsset(material.bundleAsset);
+    final graphLibrary = _graphLibraries[material.bundleAsset];
     if (graphLibrary == null) {
       throw StateError(
-        'Shader graph bundle "${material.bundleAsset}" could not be loaded.',
+        'Shader graph bundle "${material.bundleAsset}" has not been loaded yet.',
       );
     }
     final fragment = graphLibrary[material.fragmentEntry];
@@ -484,6 +502,11 @@ class _GlintGameViewState extends State<GlintGameView>
       final stopwatch = Stopwatch()..start();
       final assets = await _assets;
       final context = gpu.gpuContext;
+      await _ensureLibrary();
+      for (final instance in frame.instances) {
+        final material = instance.shaderMaterial;
+        if (material != null) await _ensureGraphLibrary(material.bundleAsset);
+      }
       final pipeline = _obtainPipeline(context);
       final skinnedPipeline = _obtainSkinnedPipeline(context);
       final texture = context.createTexture(
@@ -729,7 +752,6 @@ class _GlintGameViewState extends State<GlintGameView>
               offsetInBytes: 0,
               lengthInBytes: buffers.vertexByteLength,
             ),
-            buffers.vertexCount,
           );
           // One draw per material batch; an instance material override wins
           // over every submesh's authored factors.
@@ -742,7 +764,6 @@ class _GlintGameViewState extends State<GlintGameView>
                 lengthInBytes: submesh.indexCount * buffers.indexByteSize,
               ),
               buffers.indexType,
-              submesh.indexCount,
             );
             if (buffers.isSkinned) {
               for (var i = 0; i < 16; i++) {
@@ -844,7 +865,7 @@ class _GlintGameViewState extends State<GlintGameView>
                 );
               }
             }
-            pass.draw();
+            pass.drawIndexed(submesh.indexCount);
           }
         }
       }
@@ -933,7 +954,7 @@ class _GlintGameViewState extends State<GlintGameView>
             billboardUp,
           );
           final uploadedVertices = hostBuffer.emplace(vertexView);
-          pass.bindVertexBuffer(uploadedVertices, batch.count * 6);
+          pass.bindVertexBuffer(uploadedVertices);
           pass.bindUniform(
             particlePipeline.vertexShader.getUniformSlot('ParticleFrameInfo'),
             particleFrameInfo,
@@ -948,7 +969,7 @@ class _GlintGameViewState extends State<GlintGameView>
               heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
             ),
           );
-          pass.draw();
+          pass.draw(batch.count * 6);
           drawCalls++;
           triangles += batch.count * 2;
         }
@@ -1286,7 +1307,6 @@ class _MeshBuffers {
         gpu.StorageMode.hostVisible,
         pixels.width,
         pixels.height,
-        coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
         enableRenderTargetUsage: false,
       );
       texture.overwrite(pixels.bytes);
@@ -1407,7 +1427,6 @@ class _GameModel {
       gpu.StorageMode.hostVisible,
       1,
       1,
-      coordinateSystem: gpu.TextureCoordinateSystem.uploadFromHost,
       enableRenderTargetUsage: false,
     )..overwrite(ByteData(4)..setUint32(0, 0xffffffff));
     final bytes = await source.read();

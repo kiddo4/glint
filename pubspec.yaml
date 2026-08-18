@@ -3,7 +3,7 @@ description: >-
   A Flutter-first 3D engine on Flutter GPU: glTF models, PBR + HDRI lighting,
   skeletal animation, physics, tap picking, anchored widgets, and a real-time
   game loop.
-version: 0.2.0
+version: 0.2.1
 homepage: https://glint.kiddobuild.dev
 repository: https://github.com/kiddo4/glint
 topics:
