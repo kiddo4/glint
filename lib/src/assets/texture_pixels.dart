@@ -124,7 +124,10 @@ class GlintTexturePixels {
   }) async {
     try {
       final data = await (bundle ?? rootBundle).load(assetKey);
-      return decoder.decode(
+      // Awaited so a decode failure is caught below and wrapped as a
+      // GlintTextureException; returning the future unawaited let those
+      // errors escape this try block unwrapped.
+      return await decoder.decode(
         Uint8List.view(data.buffer, data.offsetInBytes, data.lengthInBytes),
         debugLabel: assetKey,
         maximumDimension: maximumDimension,

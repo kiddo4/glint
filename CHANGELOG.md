@@ -13,6 +13,9 @@
   now requires shader bundle format version 2 and rejects the version 1 bundle
   that 0.2.0 shipped with, so the engine failed at `ShaderLibrary` init on
   recent SDKs even once the Dart API changes were in place.
+* Await the decode in `GlintTexturePixels.fromAsset` so a failure is wrapped as
+  a `GlintTextureException` instead of escaping the surrounding try block
+  unwrapped.
 
 ## 0.2.0
 
