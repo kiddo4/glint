@@ -9,6 +9,10 @@
   `GlintGameView` resolves its engine and shader-graph libraries once at the
   top of each frame and caches them, so the per-instance draw loop stays
   synchronous.
+* Recompile `shaders/glint.shaderbundle` with the current `impellerc`. Impeller
+  now requires shader bundle format version 2 and rejects the version 1 bundle
+  that 0.2.0 shipped with, so the engine failed at `ShaderLibrary` init on
+  recent SDKs even once the Dart API changes were in place.
 
 ## 0.2.0
 
