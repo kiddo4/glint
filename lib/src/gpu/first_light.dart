@@ -470,7 +470,19 @@ class _GlintGpuFirstLightState extends State<GlintGpuFirstLight>
       // unhandled async error.
       final prepared = await _asset;
       final context = gpu.gpuContext;
+      // Labels project through _prepared, which only becomes available here —
+      // after the build that laid them out. Without a rebuild once it lands,
+      // every _buildLabel call keeps returning null and anchored widgets stay
+      // invisible until something else rebuilds the widget (a gesture, or an
+      // autoRotate tick). Scene3D defaults autoRotate to false, so a static
+      // scene showed no labels at all.
+      final hadPrepared = _prepared != null;
       _prepared = prepared;
+      if (!hadPrepared && widget.labels.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
+      }
       final mesh = prepared.mesh;
       final pipeline = await _obtainPipeline(context);
       final texture = context.createTexture(

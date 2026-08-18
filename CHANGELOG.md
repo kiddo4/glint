@@ -13,6 +13,13 @@
   now requires shader bundle format version 2 and rejects the version 1 bundle
   that 0.2.0 shipped with, so the engine failed at `ShaderLibrary` init on
   recent SDKs even once the Dart API changes were in place.
+* Fix `Label3D` anchors never appearing on a static scene. The model metadata
+  labels project through only becomes available after the first asynchronous
+  render, and the only `setState` in the GPU viewport is the render scheduler,
+  so nothing rebuilt the label layer once it landed. Anchored widgets stayed
+  invisible until a gesture or an `autoRotate` tick happened to rebuild —
+  which meant they never showed at all through `Scene3D`, where `autoRotate`
+  defaults to false.
 * Await the decode in `GlintTexturePixels.fromAsset` so a failure is wrapped as
   a `GlintTextureException` instead of escaping the surrounding try block
   unwrapped.
